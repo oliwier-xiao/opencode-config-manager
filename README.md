@@ -13,6 +13,31 @@ An Omarchy **Quattro** shell plugin (`bar-widget`). Needs `omarchy-shell`, `open
 
 ---
 
+## Install
+
+```bash
+omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git --enable
+```
+
+`--enable` puts it straight on the bar and asks which side you want it on — left, center or right.
+Leave the flag off and it installs disabled, so you can read the code first and turn it on later
+with `omarchy plugin enable oliwier.opencode-configs`.
+
+Then open the panel and press **Add a profile**. It offers three ways in:
+
+| | |
+|---|---|
+| **Save what is running now** | takes a copy of your config as it is, so you can always come back to it |
+| **Start from a template** | a whole set of models already matched to each agent, for the provider you use |
+| **Start from scratch** | the same agents your config has now, with every model yours to choose |
+
+![Adding a profile](docs/add-profile.png)
+
+Whatever you are running today is the natural first profile, so that first option is the usual
+answer.
+
+---
+
 ## Plain opencode
 
 This works with **classic opencode** and with **oh-my-openagent**. It reads your config rather than
@@ -152,31 +177,6 @@ The default is **Notify**, which writes the files and tells you which sessions h
 | **Notify** | write the files, and say what would need reloading. The default. |
 | **Restart opencode** | write the files and ask every running TUI to re-read them, in place |
 | **Nothing** | write the files and say nothing |
-
----
-
-## Install
-
-```bash
-omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git --enable
-```
-
-`--enable` puts it straight on the bar and asks which side you want it on — left, center or right.
-Leave the flag off and it installs disabled, so you can read the code first and turn it on later
-with `omarchy plugin enable oliwier.opencode-configs`.
-
-Then open the panel and press **Add a profile**. It offers three ways in:
-
-| | |
-|---|---|
-| **Save what is running now** | takes a copy of your config as it is, so you can always come back to it |
-| **Start from a template** | a whole set of models already matched to each agent, for the provider you use |
-| **Start from scratch** | the same agents your config has now, with every model yours to choose |
-
-![Adding a profile](docs/add-profile.png)
-
-Whatever you are running today is the natural first profile, so that first option is the usual
-answer.
 
 ## Settings
 
