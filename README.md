@@ -230,6 +230,24 @@ a model id that is not `provider/model`, or a field the installed oh-my-openagen
 drop all stop the write before anything is touched. If a second file fails mid-switch, the first is
 put back.
 
+## Removing it
+
+```bash
+omarchy plugin remove oliwier.opencode-configs
+```
+
+That takes the widget off the bar and deletes the plugin. Two things it deliberately does not touch:
+
+- **Your opencode config stays as it is.** Whatever profile you last switched to is still in effect,
+  because it was written into your own files and is yours. To go back further, run
+  `oc-profiles revert` before removing, or restore a copy from the backups folder below.
+- **Your profiles and backups survive**, so reinstalling later finds them again. To clear them:
+
+```bash
+rm -rf ~/.local/state/omarchy/opencode-configs        # profiles and backups
+rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
+```
+
 ## Where things live
 
 | | |
