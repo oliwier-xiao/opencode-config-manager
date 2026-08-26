@@ -27,6 +27,15 @@ omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git -
 Leave the flag off and it installs disabled, so you can read the code first and turn it on later
 with `omarchy plugin enable oliwier.opencode-configs`.
 
+To remove it:
+
+```bash
+omarchy plugin remove oliwier.opencode-configs
+```
+
+Your opencode config stays as the last switch left it, and your profiles survive a reinstall —
+[Removing it](#removing-it) says how to clear those too.
+
 ---
 
 ## Your first profile
