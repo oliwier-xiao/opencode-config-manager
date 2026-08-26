@@ -1,0 +1,834 @@
+#!/usr/bin/env bash
+# oc-profiles — the only thing that writes an opencode config file; the panel only
+# reads. jq only ever assigns the keys named in `manages`, so providers, MCP servers,
+# plugin lists and API keys come out the other side byte-equal.
+# Exit codes: 0 ok. 1 usage. 2 refused, nothing written. 3 partial write, all restored.
+
+set -uo pipefail
+
+VERSION="1.0.0"
+PLUGIN_ID="oliwier.opencode-configs"
+
+STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
+CACHE_HOME="${XDG_CACHE_HOME:-$HOME/.cache}"
+CACHE="$CACHE_HOME/omarchy/$PLUGIN_ID"
+
+CFG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
+DEFAULT_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+
+# A profile only makes sense for the config it was captured from, so a non-default
+# CFG_DIR gets its own store; the default folder keeps the plain path it always had.
+STATE="$STATE_HOME/omarchy/opencode-configs"
+if [ "$CFG_DIR" != "$DEFAULT_CFG_DIR" ]; then
+  STATE="$STATE/by-config/$(printf '%s' "$CFG_DIR" | sha256sum | cut -c1-12)"
+fi
+
+PROFILES="$STATE/profiles.json"
+BACKUPS="$STATE/backups"
+LOCK="$STATE/.lock"
+HOME_CFG="$HOME/.opencode/opencode.json"
+AUTH_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
+
+# Settings arrive as environment so the panel and a terminal drive the same code.
+OC_MANAGE_OHMY="${OC_MANAGE_OHMY:-1}"
+OC_MANAGE_OPENCODE="${OC_MANAGE_OPENCODE:-1}"
+OC_AUTO_RELOAD="${OC_AUTO_RELOAD:-1}"
+OC_BACKUPS_KEEP="${OC_BACKUPS_KEEP:-10}"
+
+# The keys each shape lets a profile own. Nothing outside these lists is ever
+# assigned, deleted, or reordered.
+OHMY_KEYS='["agents","categories","fallback_models"]'
+OPENCODE_KEYS='["model","small_model","agent"]'
+
+# oh-my-openagent 4.x declares additionalProperties:false on an agent entry: an unknown
+# key makes it drop the whole entry silently, unconfiguring the agent with no error.
+OHMY_FORBIDDEN_FIELDS='["reasoning","models","displayName","provider"]'
+
+# ---------------------------------------------------------------- plumbing
+
+die()  { printf '%s\n' "$*" >&2; exit 1; }
+warn() { printf '%s\n' "$*" >&2; }
+
+# Every failure the panel can act on comes back as JSON on stdout, so the
+# difference between "refused" and "crashed" is never a guess.
+refuse() {
+  local code="$1"; shift
+  jq -cn --arg code "$code" --arg message "$*" \
+    '{ok:false, code:$code, message:$message}'
+  exit 2
+}
+
+need() { command -v "$1" >/dev/null 2>&1 || die "oc-profiles: $1 is required"; }
+
+now_iso()  { date -u +%Y-%m-%dT%H:%M:%SZ; }
+now_stamp(){ date -u +%Y-%m-%dT%H-%M-%SZ; }
+
+# The stamp has one-second resolution and an undo lands well inside one second: without
+# a unique name the revert's own backup overwrites the copy it is about to restore from.
+new_backup_stamp() {
+  local base suffix candidate
+  base="$(now_stamp)"
+  candidate="$base"
+  suffix=2
+  while [ -e "$BACKUPS/$candidate" ] && [ "$suffix" -lt 100 ]; do
+    candidate="$base-$suffix"
+    suffix=$((suffix + 1))
+  done
+  printf '%s' "$candidate"
+}
+
+# A projection of only the managed keys, key-sorted so the digest does not move
+# when a file is reformatted or its keys reordered by hand.
+fingerprint() {
+  local file="$1" keys="$2"
+  [ -r "$file" ] || { printf 'sha256:absent'; return 0; }
+  local fp
+  fp=$(jq -S -c --argjson m "$keys" \
+        '. as $in | reduce $m[] as $k ({}; if ($in|has($k)) then .[$k]=$in[$k] else . end)' \
+        "$file" 2>/dev/null | sha256sum 2>/dev/null | cut -c1-16)
+  [ -n "$fp" ] || fp="unreadable"
+  printf 'sha256:%s' "$fp"
+}
+
+# fingerprint() over a profile's stored payload instead of a file. It must project
+# through `manages` the same way, or a profile never matches the file it came from.
+payload_fingerprint() {
+  local payload="$1" keys="$2"
+  local fp
+  fp=$(printf '%s' "$payload" | jq -S -c --argjson m "$keys" \
+        '. as $in | reduce $m[] as $k ({}; if ($in|has($k)) then .[$k]=$in[$k] else . end)' \
+        2>/dev/null | sha256sum 2>/dev/null | cut -c1-16)
+  [ -n "$fp" ] || fp="unreadable"
+  printf 'sha256:%s' "$fp"
+}
+
+# Temp file in the same directory, then rename(2): a reader sees the whole old file or
+# the whole new one, never a truncated config opencode may be reading as we write it.
+atomic_write() {
+  local dest="$1" tmp
+  # Follow the link and write what it points at; renaming over the link itself
+  # detaches a dotfiles-managed config from whatever manages it.
+  dest="$(readlink -f "$dest" 2>/dev/null || printf '%s' "$dest")"
+  tmp="$(dirname "$dest")/.$(basename "$dest").oc-tmp.$$"
+  cat > "$tmp" || { rm -f "$tmp"; return 1; }
+  [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
+  if [ -e "$dest" ]; then chmod --reference="$dest" "$tmp" 2>/dev/null || true; fi
+  mv -f "$tmp" "$dest" || { rm -f "$tmp"; return 1; }
+}
+
+ensure_state() {
+  mkdir -p "$STATE" "$BACKUPS" "$CACHE" 2>/dev/null || true
+  [ -s "$PROFILES" ] || printf '%s\n' \
+    '{"version":1,"state":{"activeProfileId":null,"appliedAt":null,"lastBackup":null,"previousProfileId":null},"favorites":[],"recents":[],"profiles":[]}' \
+    > "$PROFILES"
+}
+
+# One writer at a time: two switches racing is a user pressing twice, so the second is
+# refused rather than queued.
+take_lock() {
+  exec 9>"$LOCK" 2>/dev/null || return 0
+  flock -n 9 || refuse "E_BUSY" "Another switch is already running."
+}
+
+# ---------------------------------------------------------------- resolution
+
+# The first path that exists wins, matching the loader's own order. A .jsonc beats the
+# .json beside it, and jq cannot read comments — so finding one is cause to refuse.
+resolve_ohmy() {
+  local p
+  for p in "$CFG_DIR/oh-my-openagent.jsonc" "$CFG_DIR/oh-my-openagent.json" \
+           "$CFG_DIR/oh-my-opencode.jsonc"  "$CFG_DIR/oh-my-opencode.json"; do
+    [ -f "$p" ] && { printf '%s' "$p"; return; }
+  done
+  printf '%s' "$CFG_DIR/oh-my-openagent.json"
+}
+
+resolve_opencode() {
+  local p
+  for p in "$CFG_DIR/opencode.jsonc" "$CFG_DIR/opencode.json" "$CFG_DIR/config.json"; do
+    [ -f "$p" ] && { printf '%s' "$p"; return; }
+  done
+  printf '%s' "$CFG_DIR/opencode.json"
+}
+
+file_for() {
+  case "$1" in
+    ohmy)     resolve_ohmy ;;
+    opencode) resolve_opencode ;;
+    *)        die "oc-profiles: unknown target '$1'" ;;
+  esac
+}
+
+keys_for() {
+  case "$1" in
+    ohmy)     printf '%s' "$OHMY_KEYS" ;;
+    opencode) printf '%s' "$OPENCODE_KEYS" ;;
+  esac
+}
+
+managed() {
+  case "$1" in
+    ohmy)     [ "$OC_MANAGE_OHMY" = 1 ] ;;
+    opencode) [ "$OC_MANAGE_OPENCODE" = 1 ] ;;
+  esac
+}
+
+# jq reads these itself, from a path: passing a config as an --argjson value would put
+# every provider API key and the MCP bearer token on a command line readable in /proc.
+readable_json() {
+  if [ -r "$1" ] && jq -e . "$1" >/dev/null 2>&1; then printf '%s' "$1"; else printf '%s' /dev/null; fi
+}
+
+# ---------------------------------------------------------------- detect
+
+# Everything the panel needs to draw itself before the user touches anything. Only key
+# *names* are ever read out of auth.json — this file prints no secret.
+cmd_detect() {
+  ensure_state
+  local ohmy opencode
+  ohmy="$(resolve_ohmy)"
+  opencode="$(resolve_opencode)"
+
+  local oc_version omo_version
+  oc_version="$(command -v opencode >/dev/null 2>&1 && opencode --version 2>/dev/null | tr -d '\r' || true)"
+  omo_version="$(jq -r '.version // ""' "$CACHE_HOME/opencode/node_modules/oh-my-openagent/package.json" 2>/dev/null || true)"
+
+  local authed
+  authed="$(jq -c '[keys[]]' "$AUTH_FILE" 2>/dev/null || printf '[]')"
+
+  # Built without a pipeline: under `set -o pipefail` a pgrep that matches nothing fails
+  # the whole pipe, the `||` fallback fires on top of jq's own `[]`, and detect emits `[][]`.
+  local pids pid_list=""
+  for pid in $(pgrep -x opencode 2>/dev/null); do
+    pid_list="${pid_list:+$pid_list,}$pid"
+  done
+  pids="[$pid_list]"
+
+  # A project-level config shadows the user one, and editing the user file then
+  # has no visible effect. Worth a warning rather than a silent no-op.
+  local shadows='[]'
+  if [ -f "$PWD/.opencode/oh-my-openagent.json" ] || [ -f "$PWD/.opencode/oh-my-openagent.jsonc" ]; then
+    shadows="$(jq -cn --arg d "$PWD/.opencode" '[$d]')"
+  fi
+
+  jq -n \
+    --arg ohmyPath "$ohmy" \
+    --arg opencodePath "$opencode" \
+    --arg homePath "$HOME_CFG" \
+    --arg ohmyFp "$(fingerprint "$ohmy" "$OHMY_KEYS")" \
+    --arg opencodeFp "$(fingerprint "$opencode" "$OPENCODE_KEYS")" \
+    --arg ocVersion "$oc_version" \
+    --arg omoVersion "$omo_version" \
+    --argjson authed "$authed" \
+    --argjson pids "$pids" \
+    --argjson shadows "$shadows" \
+    --argjson ohmyExists "$([ -f "$ohmy" ] && echo true || echo false)" \
+    --argjson opencodeExists "$([ -f "$opencode" ] && echo true || echo false)" \
+    --argjson homeExists "$([ -f "$HOME_CFG" ] && echo true || echo false)" \
+    --argjson ohmyParses "$(jq -e . "$ohmy" >/dev/null 2>&1 && echo true || echo false)" \
+    --argjson opencodeParses "$(jq -e . "$opencode" >/dev/null 2>&1 && echo true || echo false)" \
+    --argjson ohmyWritable "$([ -w "$ohmy" ] || [ ! -e "$ohmy" ] && [ -w "$(dirname "$ohmy")" ] && echo true || echo false)" \
+    --argjson opencodeWritable "$([ -w "$opencode" ] || [ ! -e "$opencode" ] && [ -w "$(dirname "$opencode")" ] && echo true || echo false)" \
+    --slurpfile ohmyDocA "$(readable_json "$ohmy")" \
+    --slurpfile opencodeDocA "$(readable_json "$opencode")" \
+    --slurpfile homeDocA "$(readable_json "$HOME_CFG")" \
+    '
+    ( $ohmyDocA[0]     // null ) as $ohmyDoc     |
+    ( $opencodeDocA[0] // null ) as $opencodeDoc |
+    ( $homeDocA[0]     // null ) as $homeDoc     |
+    def fmt(p): if (p|endswith(".jsonc")) then "jsonc" else "json" end;
+    {
+      ok: true,
+      shape: (if ($ohmyExists and $ohmyDoc != null) then "oh-my-openagent" else "opencode" end),
+      opencodeVersion: $ocVersion,
+      ohMyVersion: $omoVersion,
+      authedProviders: $authed,
+      running: { pids: $pids, count: ($pids|length) },
+      files: {
+        ohmy: {
+          path: $ohmyPath, exists: $ohmyExists, format: fmt($ohmyPath),
+          parses: $ohmyParses, writable: $ohmyWritable, fingerprint: $ohmyFp,
+          agents:     (($ohmyDoc.agents     // {}) | keys),
+          categories: (($ohmyDoc.categories // {}) | keys),
+          unmanagedTopLevelKeys:
+            (($ohmyDoc // {}) | keys | map(select(. as $k | ["agents","categories","fallback_models"] | index($k) | not)))
+        },
+        opencode: {
+          path: $opencodePath, exists: $opencodeExists, format: fmt($opencodePath),
+          parses: $opencodeParses, writable: $opencodeWritable, fingerprint: $opencodeFp,
+          model: ($opencodeDoc.model // null),
+          smallModel: ($opencodeDoc.small_model // null),
+          agentKeys: (($opencodeDoc.agent // {}) | keys),
+          unmanagedTopLevelKeys:
+            (($opencodeDoc // {}) | keys | map(select(. as $k | ["model","small_model","agent"] | index($k) | not)))
+        },
+        home: {
+          path: $homePath, exists: $homeExists,
+          keys: (($homeDoc // {}) | keys),
+          # A model or agent key here is loaded last and beats everything this
+          # plugin writes. Saying so is the whole reason the file is reported.
+          overrides: (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent" or . == "small_model")))
+        }
+      },
+      warnings:
+        ( (if $ohmyExists and ($ohmyParses|not) then [{code:"E_PARSE", file:$ohmyPath}] else [] end)
+        + (if $opencodeExists and ($opencodeParses|not) then [{code:"E_PARSE", file:$opencodePath}] else [] end)
+        + (if ($ohmyPath|endswith(".jsonc")) then [{code:"E_JSONC", file:$ohmyPath}] else [] end)
+        + (if ($opencodePath|endswith(".jsonc")) then [{code:"E_JSONC", file:$opencodePath}] else [] end)
+        + ($shadows | map({code:"W_SHADOWED", dir:.}))
+        + (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent"))
+             | map({code:"W_HOME_OVERRIDE", key:., file:$homePath})) )
+    }'
+}
+
+# ---------------------------------------------------------------- validation
+
+# Refuse before writing rather than explain after: every check here would otherwise
+# produce a config that loads but silently does not do what the profile says.
+preflight() {
+  local logical="$1" payload="$2" file="$3"
+
+  [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
+  case "$file" in
+    *.jsonc) refuse "E_JSONC" "$(basename "$file") has comments in it. Nothing was changed." ;;
+  esac
+  jq -e . "$file" >/dev/null 2>&1 || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
+  [ -w "$file" ] || refuse "E_PERM" "Cannot write $(basename "$file")."
+
+  # Every model reference must look like provider/model. A typo here reaches
+  # opencode as an unknown provider and takes the agent down with it.
+  local bad
+  bad=$(printf '%s' "$payload" | jq -r '
+    [ .. | objects | select(has("model")) | .model ]
+    | map(select(type=="string")) | map(select(length > 0))
+    | map(select(test("^[A-Za-z0-9~._-]+(/[^/[:space:]]+)+$") | not))
+    | unique | .[]' 2>/dev/null | head -1)
+  [ -z "$bad" ] || refuse "E_MODEL_SYNTAX" "\"$bad\" is not a provider/model id."
+
+  if [ "$logical" = "ohmy" ]; then
+    local forbidden
+    forbidden=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_FIELDS" '
+      [ (.agents // {}), (.categories // {}) ]
+      | map(to_entries[] | .value | select(type=="object") | keys[])
+      | flatten | map(select(. as $k | $f | index($k))) | unique | .[]' 2>/dev/null | head -1)
+    [ -z "$forbidden" ] || refuse "E_FIELD_4X" \
+      "This profile sets \"$forbidden\", which oh-my-openagent drops the whole agent over."
+  fi
+}
+
+# A restore writes a whole file rather than a few keys, so it gets the same gate
+# a forward write does — the one path that used to skip every check.
+preflight_restore() {
+  local dest="$1" src="$2"
+  case "$dest" in
+    *.jsonc) refuse "E_JSONC" "$(basename "$dest") has comments in it. Nothing was changed." ;;
+  esac
+  if [ -e "$dest" ] && [ ! -w "$dest" ]; then refuse "E_PERM" "Cannot write $(basename "$dest")."; fi
+  jq -e . "$src" >/dev/null 2>&1 || refuse "E_PARSE" "That backup is not readable any more."
+}
+
+# Deliberately not a pipeline stage: refuse() inside a pipeline exits only the
+# subshell, and an edit that never landed would still be announced as saved.
+store_update() {
+  local next
+  next=$(jq "$@" "$PROFILES") || refuse "E_STORE" "Could not update the profile store."
+  [ -n "$next" ] || refuse "E_STORE" "Could not update the profile store."
+  printf '%s\n' "$next" | atomic_write "$PROFILES" \
+    || refuse "E_STORE" "Could not save the profile store."
+}
+
+# `manages` arrives from the store, which a hand edit can write. Unclamped it would let
+# a profile assign or delete mcp, provider or plugin — the keys this design never touches.
+clamp_manages() {
+  printf '%s' "$1" | jq -c --argjson a "$2" 'map(select(. as $k | $a | index($k)))'
+}
+
+# ---------------------------------------------------------------- apply
+
+cmd_apply() {
+  local id="${1:-}"
+  [ -n "$id" ] || die "usage: oc-profiles apply <profile-id>"
+  ensure_state
+  take_lock
+
+  local profile
+  profile=$(jq -c --arg id "$id" '.profiles[] | select(.id == $id)' "$PROFILES" 2>/dev/null)
+  [ -n "$profile" ] || refuse "E_NO_PROFILE" "No profile called \"$id\"."
+
+  local targets applied=() skipped=() stamp dir
+  targets=$(printf '%s' "$profile" | jq -c '.targets[]?')
+  [ -n "$targets" ] || refuse "E_EMPTY_PROFILE" "\"$id\" does not describe any config."
+
+  # Preflight everything before touching anything. A profile that would fail on
+  # its second file must not have written its first.
+  local logical payload file
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    logical=$(printf '%s' "$target" | jq -r '.file')
+    if ! managed "$logical"; then skipped+=("$logical"); continue; fi
+    payload=$(printf '%s' "$target" | jq -c '.payload // {}')
+    file="$(file_for "$logical")"
+    preflight "$logical" "$payload" "$file"
+  done <<< "$targets"
+
+  stamp="$(new_backup_stamp)"
+  dir="$BACKUPS/$stamp"
+  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+
+  local from_id backup_files='[]'
+  from_id=$(jq -r '.state.activeProfileId // ""' "$PROFILES")
+
+  # Byte copies, taken before the first write: restoring is a copy back, not a
+  # re-serialisation, so an undo returns the file with the user's own formatting.
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    logical=$(printf '%s' "$target" | jq -r '.file')
+    managed "$logical" || continue
+    file="$(file_for "$logical")"
+    cp -pL "$file" "$dir/$logical.json" || refuse "E_PERM" "Cannot back up $(basename "$file")."
+    backup_files=$(jq -cn --argjson acc "$backup_files" --arg l "$logical" --arg p "$file" \
+      --arg fp "$(fingerprint "$file" "$(keys_for "$logical")")" \
+      '$acc + [{logical:$l, path:$p, fingerprint:$fp}]')
+  done <<< "$targets"
+
+  jq -n --arg ts "$stamp" --arg from "$from_id" --arg to "$id" --argjson files "$backup_files" \
+    '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:$to, files:$files}' \
+    > "$dir/meta.json"
+
+  # Write. Any failure rolls every already-written file back from the copies
+  # above, so a switch is all of itself or none of it.
+  local wrote=()
+  local rc=0
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    logical=$(printf '%s' "$target" | jq -r '.file')
+    managed "$logical" || continue
+    payload=$(printf '%s' "$target" | jq -c '.payload // {}')
+    file="$(file_for "$logical")"
+
+    # A key the profile carries is assigned, a managed key it omits is deleted — the half
+    # a deep merge cannot do, and why switching away can remove an agent again.
+    local mkeys
+    mkeys=$(printf '%s' "$target" | jq -c --argjson d "$(keys_for "$logical")" '.manages // $d')
+    mkeys=$(clamp_manages "$mkeys" "$(keys_for "$logical")")
+
+    # Recorded before the write, not after: a write that fails part-way is
+    # exactly the one the rollback has to cover.
+    wrote+=("$logical")
+    if ! jq --argjson p "$payload" --argjson m "$mkeys" \
+        'reduce $m[] as $k (.; if ($p|has($k)) then .[$k] = $p[$k] else del(.[$k]) end)' \
+        "$file" | atomic_write "$file"; then
+      rc=1; break
+    fi
+    if ! jq -e . "$file" >/dev/null 2>&1; then rc=1; break; fi
+    applied+=("$logical")
+  done <<< "$targets"
+
+  if [ "$rc" -ne 0 ]; then
+    local l
+    for l in "${wrote[@]:-}"; do
+      [ -n "$l" ] || continue
+      cp -p "$dir/$l.json" "$(file_for "$l")" 2>/dev/null || true
+    done
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The write failed and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+
+  # Stamp the store with fresh fingerprints read back off the files we just
+  # wrote, so drift is measured against reality rather than against intent.
+  local new_targets='[]' l fp
+  for l in "${applied[@]:-}"; do
+    [ -n "$l" ] || continue
+    fp="$(fingerprint "$(file_for "$l")" "$(keys_for "$l")")"
+    new_targets=$(jq -cn --argjson acc "$new_targets" --arg l "$l" --arg fp "$fp" '$acc + [{file:$l, fingerprint:$fp}]')
+  done
+
+  store_update --arg id "$id" --arg from "$from_id" --arg at "$(now_iso)" --arg backup "$stamp" \
+     --argjson fps "$new_targets" '
+     .state.previousProfileId = (if $from == "" then null else $from end)
+   | .state.activeProfileId = $id
+   | .state.appliedAt = $at
+   | .state.lastBackup = $backup
+   | .profiles = ( .profiles | map(
+       if .id == $id then
+         .targets = ( .targets | map( . as $t
+           | ([$fps[] | select(.file == $t.file) | .fingerprint] | first) as $fp
+           | if $fp then .fingerprint = $fp else . end ) )
+       else . end ) )
+   '
+
+  prune_backups
+
+  local reloaded=0
+  if [ "$OC_AUTO_RELOAD" = 1 ]; then reload_opencode && reloaded=1; fi
+
+  jq -cn --argjson applied "$(printf '%s\n' "${applied[@]:-}" | jq -R . | jq -sc 'map(select(length>0))')" \
+         --argjson skipped "$(printf '%s\n' "${skipped[@]:-}" | jq -R . | jq -sc 'map(select(length>0))')" \
+         --arg backup "$stamp" --arg id "$id" --argjson reloaded "$reloaded" \
+    '{ok:true, activeProfileId:$id, applied:$applied, skipped:$skipped, backup:$backup, reloaded:$reloaded}'
+}
+
+# ---------------------------------------------------------------- revert
+
+cmd_revert() {
+  ensure_state
+  take_lock
+
+  local ts
+  ts="${1:-$(jq -r '.state.lastBackup // ""' "$PROFILES")}"
+  [ -n "$ts" ] || refuse "E_NO_BACKUP" "There is no backup to go back to."
+  # A backup name is a timestamp this script wrote. Anything else is not a
+  # backup, and a path fragment is certainly not one.
+  case "$ts" in
+    */*|*..*) refuse "E_NO_BACKUP" "\"$ts\" is not a backup name." ;;
+  esac
+  case "$ts" in
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]-[0-9][0-9]-[0-9][0-9]Z) ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]-[0-9][0-9]-[0-9][0-9]Z-[1-9]) ;;
+    [0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]T[0-9][0-9]-[0-9][0-9]-[0-9][0-9]Z-[1-9][0-9]) ;;
+    *) refuse "E_NO_BACKUP" "\"$ts\" is not a backup name." ;;
+  esac
+  local dir="$BACKUPS/$ts"
+  [ -f "$dir/meta.json" ] || refuse "E_NO_BACKUP" "Backup $ts is gone."
+
+  # A revert is a write like any other, so it gets its own backup first: undo
+  # has to be undoable or it is just a second way to lose the config.
+  local stamp new_dir
+  stamp="$(new_backup_stamp)"; new_dir="$BACKUPS/$stamp"
+  mkdir -p "$new_dir"
+
+  local files logical path
+  files=$(jq -c '.files[]' "$dir/meta.json")
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    logical=$(printf '%s' "$f" | jq -r '.logical')
+    path="$(file_for "$logical")"
+    if [ -f "$path" ]; then
+      cp -pL "$path" "$new_dir/$logical.json" \
+        || refuse "E_PERM" "Cannot back up $(basename "$path") before undoing."
+    fi
+  done <<< "$files"
+
+  local to_id
+  to_id=$(jq -r '.state.activeProfileId // ""' "$PROFILES")
+  jq -n --arg ts "$stamp" --arg from "$to_id" --argjson files "$(jq -c '.files' "$dir/meta.json")" \
+    '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:null, files:$files}' \
+    > "$new_dir/meta.json"
+
+  local restored='[]'
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    logical=$(printf '%s' "$f" | jq -r '.logical')
+    # The path the backup came FROM, not whatever resolves today.
+    path=$(printf '%s' "$f" | jq -r '.path // empty')
+    [ -n "$path" ] || path="$(file_for "$logical")"
+    case "$path" in "$CFG_DIR"/*|"$HOME_CFG") ;; *) continue ;; esac
+    [ -f "$dir/$logical.json" ] || continue
+    preflight_restore "$path" "$dir/$logical.json"
+    cat "$dir/$logical.json" | atomic_write "$path" || refuse "E_WRITE" "Could not put $(basename "$path") back."
+    restored=$(jq -cn --argjson acc "$restored" --arg l "$logical" '$acc + [$l]')
+  done <<< "$files"
+
+  local back_to
+  back_to=$(jq -r '.fromProfileId // ""' "$dir/meta.json")
+  store_update --arg id "$back_to" --arg prev "$to_id" --arg at "$(now_iso)" --arg backup "$stamp" '
+      .state.activeProfileId = (if $id == "" then null else $id end)
+    | .state.previousProfileId = (if $prev == "" then null else $prev end)
+    | .state.appliedAt = $at
+    | .state.lastBackup = $backup
+  '
+
+  prune_backups
+
+  local reloaded=0
+  if [ "$OC_AUTO_RELOAD" = 1 ]; then reload_opencode && reloaded=1; fi
+
+  jq -cn --arg ts "$ts" --arg backup "$stamp" --argjson restored "$restored" \
+         --arg id "$back_to" --argjson reloaded "$reloaded" \
+    '{ok:true, reverted:$ts, backup:$backup, restored:$restored,
+      activeProfileId:(if $id=="" then null else $id end), reloaded:$reloaded}'
+}
+
+prune_backups() {
+  [ "$OC_BACKUPS_KEEP" -ge 0 ] 2>/dev/null || return 0
+
+  # The backup the store points at is the one Undo restores, so it is never a candidate:
+  # with keepBackups 0 the prune would delete the copy taken seconds earlier.
+  local keep_ts
+  keep_ts=$(jq -r '.state.lastBackup // ""' "$PROFILES" 2>/dev/null)
+
+  local doomed
+  doomed=$(ls -1d "$BACKUPS"/*/ 2>/dev/null | sort | head -n "-$OC_BACKUPS_KEEP" 2>/dev/null)
+  [ -n "$doomed" ] || return 0
+
+  local d name
+  while IFS= read -r d; do
+    [ -n "$d" ] || continue
+    case "$d" in "$BACKUPS"/*) ;; *) continue ;; esac
+    name=$(basename "${d%/}")
+    [ "$name" = "$keep_ts" ] && continue
+    [ -L "${d%/}" ] && { rm -f "${d%/}"; continue; }
+    [ -d "${d%/}" ] || continue
+    rm -rf "$d"
+  done <<< "$doomed"
+}
+
+# ---------------------------------------------------------------- reload
+
+# SIGUSR2 is opencode's own "re-read your config" signal, so a switch keeps the session.
+# Only the TUI installs a handler and SIGUSR2's default disposition is death — check each pid.
+catches_sigusr2() {
+  local pid="$1" mask
+  mask=$(awk '/^SigCgt:/{print $2}' "/proc/$pid/status" 2>/dev/null)
+  [ -n "$mask" ] || return 1
+  # SIGUSR2 is signal 12, so it is bit 11 of the caught-signal mask.
+  python3 -c "import sys; sys.exit(0 if (int('$mask',16) >> 11) & 1 else 1)" 2>/dev/null
+}
+
+reloadable_pids() {
+  local pid
+  for pid in $(pgrep -x opencode 2>/dev/null); do
+    catches_sigusr2 "$pid" && printf '%s\n' "$pid"
+  done
+}
+
+reload_opencode() {
+  local pids
+  pids=$(reloadable_pids)
+  [ -n "$pids" ] || return 1
+  printf '%s\n' "$pids" | while IFS= read -r pid; do
+    [ -n "$pid" ] && kill -USR2 "$pid" 2>/dev/null
+  done
+  return 0
+}
+
+cmd_reload() {
+  local pids n total skipped
+  pids=$(reloadable_pids)
+  n=$(printf '%s' "$pids" | grep -c . 2>/dev/null || true)
+  [ -n "$n" ] || n=0
+  total=$(pgrep -cx opencode 2>/dev/null || true)
+  [ -n "$total" ] || total=0
+  skipped=$((total - n))
+
+  if [ "$n" -gt 0 ]; then
+    reload_opencode
+    jq -cn --argjson n "$n" --argjson skipped "$skipped" \
+      '{ok:true, reloaded:$n, skipped:$skipped}'
+  elif [ "$total" -gt 0 ]; then
+    jq -cn --argjson skipped "$skipped" \
+      '{ok:true, reloaded:0, skipped:$skipped,
+        message:"opencode is running but not listening for a config reload."}'
+  else
+    jq -cn '{ok:true, reloaded:0, skipped:0, message:"opencode is not running."}'
+  fi
+}
+
+# ---------------------------------------------------------------- capture
+
+# Turn what is on disk right now into a profile — how "Save current config" works.
+cmd_capture() {
+  local name="${1:-}" id="${2:-}"
+  [ -n "$name" ] || die "usage: oc-profiles capture <name> [id]"
+  ensure_state
+  take_lock
+
+  if [ -z "$id" ]; then
+    id=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
+    [ -n "$id" ] || id="profile"
+    local base="$id" n=2
+    while jq -e --arg i "$id" 'any(.profiles[]; .id == $i)' "$PROFILES" >/dev/null 2>&1; do
+      id="$base-$n"; n=$((n+1))
+    done
+  fi
+
+  local targets='[]' logical file doc
+  for logical in ohmy opencode; do
+    managed "$logical" || continue
+    file="$(file_for "$logical")"
+    [ -f "$file" ] || continue
+    jq -e . "$file" >/dev/null 2>&1 || continue
+    doc=$(jq -c --argjson m "$(keys_for "$logical")" \
+      '. as $in | reduce $m[] as $k ({}; if ($in|has($k)) then .[$k]=$in[$k] else . end)' "$file")
+    [ "$doc" = "{}" ] && continue
+    targets=$(jq -cn --argjson acc "$targets" --arg l "$logical" --argjson p "$doc" \
+      --argjson m "$(printf '%s' "$doc" | jq -c 'keys')" \
+      --arg fp "$(fingerprint "$file" "$(keys_for "$logical")")" \
+      --arg shape "$([ "$logical" = ohmy ] && echo oh-my-openagent || echo opencode)" \
+      '$acc + [{file:$l, shape:$shape, manages:$m, fingerprint:$fp, payload:$p}]')
+  done
+
+  [ "$targets" != "[]" ] || refuse "E_EMPTY" "There is nothing in your opencode config to save."
+
+  # Two or three letters keeps the bar a fixed width. Initials of every word, not the
+  # first two letters: "Full Opus" is FO, "Full OX Alpha" is FOA; one word takes two.
+  local short
+  short=$(printf '%s' "$name" | awk '{
+    n = split($0, w, /[ _-]+/)
+    if (n >= 2) { out = ""; for (i = 1; i <= n && length(out) < 3; i++) out = out substr(w[i], 1, 1); print out }
+    else print substr($0, 1, 2)
+  }' | tr '[:lower:]' '[:upper:]')
+
+  store_update --arg id "$id" --arg name "$name" --arg short "$short" --arg at "$(now_iso)" --argjson t "$targets" '
+      .profiles = ( (.profiles | map(select(.id != $id)))
+        + [{id:$id, name:$name, shortName:$short, description:"",
+            createdAt:$at, updatedAt:$at, targets:$t}] )
+  '
+
+  jq -cn --arg id "$id" --arg name "$name" '{ok:true, id:$id, name:$name}'
+}
+
+# ---------------------------------------------------------------- store edits
+
+# The panel hands a whole profile object in on stdin. Passing it as an argument
+# would put a config through argv and into every process listing on the box.
+cmd_save() {
+  ensure_state
+  take_lock
+  local incoming
+  # Quickshell's Process has no way to write to a child's stdin, so the panel hands the
+  # profile over in the environment; a terminal still pipes. Neither route uses argv.
+  if [ -n "${OC_PROFILE_JSON:-}" ]; then incoming="$OC_PROFILE_JSON"; else incoming=$(cat); fi
+  printf '%s' "$incoming" | jq -e '.id and .name' >/dev/null 2>&1 \
+    || refuse "E_BAD_PROFILE" "That profile has no id or no name."
+
+  # Fingerprints are derived here, never trusted from the caller: a profile duplicated in
+  # the panel carries the original's digest and would claim to match a config it does not.
+  local rebuilt='[]' t logical payload mkeys
+  while IFS= read -r t; do
+    [ -n "$t" ] || continue
+    logical=$(printf '%s' "$t" | jq -r '.file')
+    payload=$(printf '%s' "$t" | jq -c '.payload // {}')
+    mkeys=$(printf '%s' "$t" | jq -c --argjson d "$(keys_for "$logical")" '.manages // $d')
+    mkeys=$(clamp_manages "$mkeys" "$(keys_for "$logical")")
+    t=$(printf '%s' "$t" | jq -c --argjson m "$mkeys" '.manages = $m')
+    rebuilt=$(jq -cn --argjson acc "$rebuilt" --argjson t "$t" \
+      --arg fp "$(payload_fingerprint "$payload" "$(keys_for "$logical")")" \
+      '$acc + [ $t + {fingerprint: $fp} ]')
+  done <<< "$(printf '%s' "$incoming" | jq -c '.targets[]?')"
+  incoming=$(printf '%s' "$incoming" | jq -c --argjson t "$rebuilt" '.targets = $t')
+
+  store_update --argjson p "$incoming" --arg at "$(now_iso)" '
+      .profiles = ( (.profiles | map(select(.id != $p.id)))
+        + [ $p + {updatedAt:$at, createdAt:( $p.createdAt // $at )} ] )
+  '
+
+  printf '%s' "$incoming" | jq -c '{ok:true, id:.id}'
+}
+
+cmd_delete() {
+  local id="${1:-}"
+  [ -n "$id" ] || die "usage: oc-profiles delete <profile-id>"
+  ensure_state
+  take_lock
+  jq -e --arg id "$id" 'any(.profiles[]; .id == $id)' "$PROFILES" >/dev/null 2>&1 \
+    || refuse "E_NO_PROFILE" "No profile called \"$id\"."
+  store_update --arg id "$id" '
+      .profiles = (.profiles | map(select(.id != $id)))
+    | .state.activeProfileId = (if .state.activeProfileId == $id then null else .state.activeProfileId end)
+    | .state.previousProfileId = (if .state.previousProfileId == $id then null else .state.previousProfileId end)
+  '
+  jq -cn --arg id "$id" '{ok:true, deleted:$id}'
+}
+
+# The store plus the live fingerprints, which together answer the only question
+# the panel opens with: is what is running still what the active profile says?
+cmd_list() {
+  ensure_state
+  local ohmy_fp opencode_fp
+  ohmy_fp="$(fingerprint "$(resolve_ohmy)" "$OHMY_KEYS")"
+  opencode_fp="$(fingerprint "$(resolve_opencode)" "$OPENCODE_KEYS")"
+
+  # `matches` makes a switch made outside this panel recognisable rather than reported as
+  # damage. No jq `//` near a boolean: `false // true` is `true`, marking clean as drifted.
+  jq --arg ohmy "$ohmy_fp" --arg opencode "$opencode_fp" '
+    . as $root
+    | ($root.state.activeProfileId) as $id
+    | def clean(p):
+        (p.targets // [])
+        | length > 0
+        and ( map( .fingerprint == (if .file == "ohmy" then $ohmy else $opencode end) ) | all );
+      . + { live: { ohmy: $ohmy, opencode: $opencode },
+            matches: [ $root.profiles[] | select(clean(.)) | .id ] }
+    | .drift = ( if $id == null then true
+                 else ( [ $root.profiles[] | select(.id == $id) ]
+                        | if length == 0 then true else (clean(.[0]) | not) end )
+                 end )
+  ' "$PROFILES"
+}
+
+# Favourites and recents live beside the profiles: one file, one writer, nothing second
+# to keep in step.
+cmd_prefs() {
+  ensure_state
+  take_lock
+  local incoming
+  if [ -n "${OC_PREFS_JSON:-}" ]; then incoming="$OC_PREFS_JSON"; else incoming=$(cat); fi
+  printf '%s' "$incoming" | jq -e 'type == "object"' >/dev/null 2>&1 \
+    || refuse "E_BAD_PREFS" "Preferences must be an object."
+
+  store_update --argjson p "$incoming" '
+      # Deduped without unique_by, which sorts. The order here is "most recently
+      # starred first", and sorting it alphabetically throws away the only thing
+      # that makes the top of the list worth having.
+      .favorites = (($p.favorites // .favorites // []) | map(select(type == "string"))
+                    | reduce .[] as $x ([]; if index([$x]) == null then . + [$x] else . end))
+    | .recents   = (($p.recents   // .recents   // []) | map(select(type == "string")) | .[0:8])
+  '
+
+  jq -c '{ok:true, favorites:(.favorites|length), recents:(.recents|length)}' "$PROFILES"
+}
+
+cmd_backups() {
+  ensure_state
+  local out='[]' d
+  for d in $(ls -1d "$BACKUPS"/*/ 2>/dev/null | sort -r); do
+    [ -f "$d/meta.json" ] || continue
+    out=$(jq -cn --argjson acc "$out" --argjson m "$(jq -c . "$d/meta.json")" '$acc + [$m]')
+  done
+  printf '%s\n' "$out"
+}
+
+usage() {
+  cat <<'USAGE'
+oc-profiles — read and switch opencode model profiles
+
+  detect                    what is on disk, what is running, what is authed
+  list                      the profile store plus live fingerprints and drift
+  capture <name> [id]       save the live config as a new profile
+  apply <id>                switch to a profile (backs up, writes, reloads)
+  revert [<backup-ts>]      put the previous config back
+  save                      upsert a profile object from stdin or $OC_PROFILE_JSON
+  delete <id>               remove a profile
+  prefs                     upsert {favorites,recents} from stdin or $OC_PREFS_JSON
+  backups                   every backup taken, newest first
+  reload                    tell a running opencode to re-read its config
+
+Settings come from the environment:
+  OC_MANAGE_OHMY=1  OC_MANAGE_OPENCODE=1  OC_AUTO_RELOAD=1  OC_BACKUPS_KEEP=10
+USAGE
+}
+
+# ---------------------------------------------------------------- entry
+
+need jq
+need date
+need flock
+need python3
+
+case "${1:-}" in
+  detect)   shift; cmd_detect "$@" ;;
+  list)     shift; cmd_list "$@" ;;
+  capture)  shift; cmd_capture "$@" ;;
+  apply)    shift; cmd_apply "$@" ;;
+  revert)   shift; cmd_revert "$@" ;;
+  save)     shift; cmd_save "$@" ;;
+  delete)   shift; cmd_delete "$@" ;;
+  prefs)    shift; cmd_prefs "$@" ;;
+  backups)  shift; cmd_backups "$@" ;;
+  reload)   shift; cmd_reload "$@" ;;
+  --version) printf '%s\n' "$VERSION" ;;
+  -h|--help|"") usage ;;
+  *) usage; exit 1 ;;
+esac
