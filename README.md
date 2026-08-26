@@ -31,18 +31,19 @@ with `omarchy plugin enable oliwier.opencode-configs`.
 
 ## Your first profile
 
-Open the panel and press **Add a profile**. It offers three ways in:
+You already have one. The first time the panel opens it saves whatever you are running as
+**Current config**, so there is a copy of your setup before you change anything — and something to
+come back to. Nothing is written to your opencode config to do that; it is only read.
+
+To add more, press **Add a profile**. It offers three ways in:
 
 | | |
 |---|---|
-| **Save what is running now** | takes a copy of your config as it is, so you can always come back to it |
+| **Save what is running now** | another copy of your config as it is |
 | **Start from a template** | a whole set of models already matched to each agent, for the provider you use |
 | **Start from scratch** | the same agents your config has now, with every model yours to choose |
 
 ![Adding a profile](docs/add-profile.png)
-
-Whatever you are running today is the natural first profile, so the first option is the usual
-answer — and having a copy of it is what makes everything after this reversible.
 
 ---
 
@@ -218,6 +219,7 @@ Everything the panel writes goes through one script, which you can run yourself:
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles detect     # what is on disk
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles list       # profiles + drift
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles capture X  # save the live config
+~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles seed       # first profile, if there are none
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles apply X    # switch
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles revert     # undo the last switch
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles reload     # re-read config in place

@@ -66,6 +66,10 @@ Panel {
   // Set by an action that wants the editor once the store has caught up:
   // runAction's callback fires before the re-read has landed.
   property string pendingEditorId: ""
+  // Tried once per shell session: an empty store on first run gets the live
+  // config saved as its first profile, so the panel opens on the user's own
+  // setup instead of on "Custom" and a warning that nothing matches.
+  property bool seedTried: false
   property var templates: []
   readonly property int templateCount: root.templates ? root.templates.length : 0
 
@@ -741,6 +745,11 @@ Panel {
         if (parsed && Array.isArray(parsed.profiles)) {
           root.store = parsed
           root.loaded = true
+          if (parsed.profiles.length === 0 && !root.seedTried && !root.busy) {
+            root.seedTried = true
+            root.runAction(["seed"], root.actionEnv, null)
+            return
+          }
           if (root.selectedIndex >= parsed.profiles.length) root.selectedIndex = 0
           if (root.pendingEditorId !== "") {
             var wanted = root.pendingEditorId

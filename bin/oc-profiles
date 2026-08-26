@@ -679,6 +679,49 @@ cmd_capture() {
   jq -cn --arg id "$id" --arg name "$name" '{ok:true, id:$id, name:$name}'
 }
 
+# First run. A brand-new store means the panel would otherwise open on "Custom",
+# an empty list and a warning that nothing matches — which reads like a fault
+# when nothing is wrong. Capturing what is already there costs one read and
+# gives the user their own setup to look at, and to come back to.
+#
+# Refuses once any profile exists, so it can never overwrite a real store. It
+# writes no config file: the profile is taken FROM disk, so its fingerprints
+# already match and marking it active is just bookkeeping.
+cmd_seed() {
+  ensure_state
+  take_lock
+
+  local existing
+  existing=$(jq -r '.profiles | length' "$PROFILES" 2>/dev/null || echo 0)
+  if [ "$existing" != "0" ]; then
+    jq -cn '{ok:true, seeded:false, reason:"there are already profiles"}'
+    return 0
+  fi
+
+  local ohmy opencode ok=0
+  ohmy="$(resolve_ohmy)"; opencode="$(resolve_opencode)"
+  for f in "$ohmy" "$opencode"; do
+    [ -f "$f" ] && jq -e . "$f" >/dev/null 2>&1 && ok=1
+  done
+  if [ "$ok" != 1 ]; then
+    jq -cn '{ok:true, seeded:false, reason:"no readable opencode config"}'
+    return 0
+  fi
+
+  # cmd_capture takes the lock itself, so hand off rather than call it here.
+  flock -u 9 2>/dev/null || true
+  cmd_capture "Current config" current-config >/dev/null 2>&1 || {
+    jq -cn '{ok:true, seeded:false, reason:"nothing in the config to save"}'
+    return 0
+  }
+
+  store_update --arg id current-config --arg at "$(now_iso)" '
+      .state.activeProfileId = $id
+    | .state.appliedAt = $at
+  '
+  jq -cn '{ok:true, seeded:true, id:"current-config"}'
+}
+
 # ---------------------------------------------------------------- store edits
 
 # The panel hands a whole profile object in on stdin. Passing it as an argument
@@ -797,6 +840,7 @@ oc-profiles — read and switch opencode model profiles
   detect                    what is on disk, what is running, what is authed
   list                      the profile store plus live fingerprints and drift
   capture <name> [id]       save the live config as a new profile
+  seed                      on an empty store, save the live config as the first profile
   apply <id>                switch to a profile (backs up, writes, reloads)
   revert [<backup-ts>]      put the previous config back
   save                      upsert a profile object from stdin or $OC_PROFILE_JSON
@@ -821,6 +865,7 @@ case "${1:-}" in
   detect)   shift; cmd_detect "$@" ;;
   list)     shift; cmd_list "$@" ;;
   capture)  shift; cmd_capture "$@" ;;
+  seed)     shift; cmd_seed "$@" ;;
   apply)    shift; cmd_apply "$@" ;;
   revert)   shift; cmd_revert "$@" ;;
   save)     shift; cmd_save "$@" ;;
