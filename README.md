@@ -8,6 +8,10 @@ and a running session re-reads its config where it stands — nothing closes, no
 
 ![The bar widget](docs/bar.png)
 
+Works with **classic opencode** and with **oh-my-openagent** — it reads your config rather than
+carrying a list of its own, so it shows whatever is actually in the file, including agents you
+added yourself. The pill in the top right of the panel says which of the two it found.
+
 An Omarchy **Quattro** shell plugin (`bar-widget`). Needs `omarchy-shell`, `opencode`, and the
 `jq`, `python3`, `flock`, `sha256sum` and `pgrep` an Arch install already has.
 
@@ -23,7 +27,11 @@ omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git -
 Leave the flag off and it installs disabled, so you can read the code first and turn it on later
 with `omarchy plugin enable oliwier.opencode-configs`.
 
-Then open the panel and press **Add a profile**. It offers three ways in:
+---
+
+## Your first profile
+
+Open the panel and press **Add a profile**. It offers three ways in:
 
 | | |
 |---|---|
@@ -33,22 +41,17 @@ Then open the panel and press **Add a profile**. It offers three ways in:
 
 ![Adding a profile](docs/add-profile.png)
 
-Whatever you are running today is the natural first profile, so that first option is the usual
-answer.
+Whatever you are running today is the natural first profile, so the first option is the usual
+answer — and having a copy of it is what makes everything after this reversible.
 
 ---
 
 ## Plain opencode
 
-This works with **classic opencode** and with **oh-my-openagent**. It reads your config rather than
-carrying a list of its own, so it shows whatever is actually in the file — including agents you
-added yourself.
-
 If you use opencode on its own, it manages the `model`, `small_model` and `agent` keys of
 `~/.config/opencode/opencode.json`. That means the built-in `plan` and `build`, and any agent you
 have defined in that file's `agent` key: add one and it appears here on the next panel open, with
-no configuration. The pill in the top right of the panel tells you which shape was detected — it
-reads `opencode` here, and `oh-my-openagent` when that plugin is in use.
+no configuration.
 
 ![Profiles, plain opencode](docs/plain-profiles.png)
 
