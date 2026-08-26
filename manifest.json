@@ -1,0 +1,122 @@
+{
+  "schemaVersion": 1,
+  "id": "oliwier.opencode-configs",
+  "name": "OpenCode Configs",
+  "version": "1.0.0",
+  "author": "oliwier-xiao",
+  "license": "MIT",
+  "description": "Saved opencode model profiles in the bar. Switch which model every agent runs on with one click, and edit any profile from a searchable list of every model your opencode can reach.",
+  "homepage": "https://github.com/oliwier-xiao/opencode-config-manager",
+  "kinds": [
+    "bar-widget"
+  ],
+  "activation": "on-demand",
+  "entryPoints": {
+    "barWidget": "BarWidget.qml"
+  },
+  "barWidget": {
+    "displayName": "OpenCode Configs",
+    "description": "Switch between saved opencode model profiles and edit which model each agent uses.",
+    "category": "AI",
+    "aliases": [
+      "opencode",
+      "models",
+      "agents",
+      "profiles"
+    ],
+    "allowMultiple": false,
+    "defaultSection": "right",
+    "defaults": {
+      "barLabel": "Profile name",
+      "afterSwitch": "Notify",
+      "manageOpencodeJson": true,
+      "manageOhMyOpenAgent": true,
+      "keepBackups": 10,
+      "catalogRefreshHours": 24,
+      "showModelMeta": true,
+      "confirmSwitch": false,
+      "configDir": ""
+    },
+    "schema": [
+      {
+        "key": "barLabel",
+        "type": "enum",
+        "label": "Next to the bar icon",
+        "options": [
+          "Profile name",
+          "Model",
+          "Nothing"
+        ],
+        "defaultValue": "Profile name",
+        "description": "What the bar says about the profile in use. The name is the thing you chose it by and the thing you switch away from, so it is the default; the model is the thing you are paying for, and worth the width when the profiles differ only in that. Nothing leaves an icon, and the panel answers the question."
+      },
+      {
+        "key": "afterSwitch",
+        "type": "enum",
+        "label": "After switching a profile",
+        "options": [
+          "Notify",
+          "Restart opencode",
+          "Nothing"
+        ],
+        "defaultValue": "Notify",
+        "description": "A running opencode read its config when it started. Notify writes the files and says which sessions have not seen them yet. Restart opencode asks each running session to re-read its config where it stands — nothing closes, nothing is lost, and the next message uses the new models. Nothing writes the files and says nothing."
+      },
+      {
+        "key": "confirmSwitch",
+        "type": "boolean",
+        "label": "Ask before switching",
+        "defaultValue": false,
+        "description": "A switch rewrites your opencode config, keeping a backup and an undo. Off is the fast path the bar is for; on is worth it when a mis-click would cost a long-running session."
+      },
+      {
+        "key": "manageOpencodeJson",
+        "type": "boolean",
+        "label": "Manage opencode.json",
+        "defaultValue": true,
+        "description": "The default model and any agents defined there. Everything else in the file — providers, MCP servers, plugins, keybinds — is left exactly as it was."
+      },
+      {
+        "key": "manageOhMyOpenAgent",
+        "type": "boolean",
+        "label": "Manage oh-my-openagent.json",
+        "defaultValue": true,
+        "description": "The per-agent and per-category models that the oh-my-openagent plugin reads. Ignored when that file does not exist."
+      },
+      {
+        "key": "keepBackups",
+        "type": "integer",
+        "label": "Keep backups",
+        "min": 1,
+        "max": 50,
+        "step": 1,
+        "defaultValue": 10,
+        "description": "Copies of each config file taken immediately before a switch overwrites it, oldest deleted past this count. Undo reads the newest pair, which is never pruned, so one is always kept whatever this says."
+      },
+      {
+        "key": "catalogRefreshHours",
+        "type": "integer",
+        "label": "Refresh the model list every",
+        "min": 1,
+        "max": 720,
+        "step": 1,
+        "defaultValue": 24,
+        "description": "Hours. The list of models comes from your own opencode, so it holds exactly what your keys can reach, and is cached between panel opens. New models appear at the next refresh or when you press r."
+      },
+      {
+        "key": "showModelMeta",
+        "type": "boolean",
+        "label": "Show context and price",
+        "defaultValue": true,
+        "description": "Adds the context window and the per-million input and output price to every row in the model list, taken from models.dev. Off leaves the model names alone, which is the version to run on a narrow bar."
+      },
+      {
+        "key": "configDir",
+        "type": "path",
+        "label": "opencode config folder",
+        "defaultValue": "",
+        "description": "Leave empty for the usual one. Set it to point at a second set of config files — the same thing OPENCODE_CONFIG_DIR does for opencode itself."
+      }
+    ]
+  }
+}
