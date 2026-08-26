@@ -1,0 +1,1476 @@
+{
+  "version": 1,
+  "templates": [
+    {
+      "id": "free",
+      "name": "Free",
+      "shortName": "FR",
+      "vendor": "mixed",
+      "description": "Costs nothing. Every agent is pinned to a free model and given two free fallbacks, because these are preview SKUs and previews get withdrawn without notice.",
+      "requires": [
+        "openrouter",
+        "opencode"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "openrouter/z-ai/glm-5.2:free",
+        "small_model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+        "agent": {
+          "plan": {
+            "model": "openrouter/z-ai/glm-5.2:free"
+          },
+          "build": {
+            "model": "openrouter/minimax/minimax-m3:free"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "openrouter/z-ai/glm-5.2:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "openrouter/minimax/minimax-m3:free",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              },
+              {
+                "model": "openrouter/z-ai/glm-5.2:free",
+                "variant": "high"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "openrouter/z-ai/glm-5.2:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "high"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "openrouter/minimax/minimax-m3:free",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m2.7:free"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5.2:free",
+                "variant": "xhigh"
+              },
+              {
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "high"
+              }
+            ]
+          },
+          "metis": {
+            "model": "openrouter/thinkingmachines/inkling:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "momus": {
+            "model": "openrouter/z-ai/glm-5.2:free",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+                "variant": "high"
+              },
+              {
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "high"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3.5-lightning-free"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              }
+            ]
+          },
+          "explore": {
+            "model": "opencode/nemotron-3.5-lightning-free",
+            "fallback_models": [
+              {
+                "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m2.7:free"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "openrouter/minimax/minimax-m3:free",
+            "fallback_models": [
+              {
+                "model": "opencode/mimo-v2.5-free"
+              },
+              {
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "low"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "openrouter/minimax/minimax-m2.7:free",
+            "fallback_models": [
+              {
+                "model": "opencode/big-pickle"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "openrouter/thinkingmachines/inkling:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              },
+              {
+                "model": "opencode/mimo-v2.5-free"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "openrouter/thinkingmachines/inkling:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/dots-studio/dots-3-note-preview:free"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "openrouter/z-ai/glm-5.2:free",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+                "variant": "high"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "deep": {
+            "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              },
+              {
+                "model": "openrouter/z-ai/glm-5.2:free",
+                "variant": "high"
+              }
+            ]
+          },
+          "quick": {
+            "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3.5-lightning-free"
+              },
+              {
+                "model": "openrouter/liquid/lfm-2.5-2.6b:free"
+              }
+            ]
+          },
+          "writing": {
+            "model": "openrouter/thinkingmachines/inkling:free",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              },
+              {
+                "model": "openrouter/google/gemma-4-31b-it:free"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "openrouter/minimax/minimax-m2.7:free",
+            "fallback_models": [
+              {
+                "model": "opencode/big-pickle"
+              },
+              {
+                "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "openrouter/z-ai/glm-5.2:free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3:free"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "openrouter/minimax/minimax-m3:free"
+          },
+          {
+            "model": "opencode/nemotron-3-ultra-free"
+          }
+        ]
+      }
+    },
+    {
+      "id": "budget",
+      "name": "Budget",
+      "shortName": "BG",
+      "vendor": "mixed",
+      "description": "The cheapest set that still finishes a real task. GLM 5.2 does the thinking, MiniMax M3 does the work, DeepSeek Flash does the reading.",
+      "requires": [
+        "openrouter"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "openrouter/z-ai/glm-5.2",
+        "small_model": "openrouter/deepseek/deepseek-v4-flash-0731",
+        "agent": {
+          "plan": {
+            "model": "openrouter/z-ai/glm-5.2"
+          },
+          "build": {
+            "model": "openrouter/z-ai/glm-5"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5"
+              },
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "openrouter/minimax/minimax-m3",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "openrouter/z-ai/glm-5",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "metis": {
+            "model": "openrouter/z-ai/glm-5",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5.2",
+                "variant": "high"
+              }
+            ]
+          },
+          "momus": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "openrouter/qwen/qwen3.7-flash",
+            "fallback_models": [
+              {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "low"
+              }
+            ]
+          },
+          "explore": {
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openrouter/qwen/qwen3.7-flash"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "openrouter/qwen/qwen3.7-flash",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "openrouter/minimax/minimax-m3",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "openrouter/minimax/minimax-m3",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5.2",
+                "variant": "high"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5"
+              }
+            ]
+          },
+          "deep": {
+            "model": "openrouter/z-ai/glm-5",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "quick": {
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openrouter/qwen/qwen3.7-flash"
+              }
+            ]
+          },
+          "writing": {
+            "model": "openrouter/minimax/minimax-m3",
+            "fallback_models": [
+              {
+                "model": "openrouter/qwen/qwen3.7-flash"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "openrouter/qwen/qwen3.7-flash",
+            "fallback_models": [
+              {
+                "model": "openrouter/minimax/minimax-m3"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "openrouter/z-ai/glm-5.2",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "openrouter/z-ai/glm-5"
+          },
+          {
+            "model": "openrouter/minimax/minimax-m3"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gemini-api",
+      "name": "Gemini API",
+      "shortName": "GM",
+      "vendor": "google",
+      "description": "Every agent on Google. Gemini 3.1 Pro plans and reasons, Flash reads the codebase and the docs, Flash-Lite handles the throwaway work.",
+      "requires": [
+        "google"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "google/gemini-3.1-pro-preview",
+        "small_model": "google/gemini-3.1-flash-lite",
+        "agent": {
+          "plan": {
+            "model": "google/gemini-3.1-pro-preview"
+          },
+          "build": {
+            "model": "google/gemini-3.7-flash"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "high"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.5-flash",
+                "variant": "high"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-2.5-pro"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "google/gemini-3.7-flash",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "medium"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-2.5-pro"
+              }
+            ]
+          },
+          "metis": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "high"
+              }
+            ]
+          },
+          "momus": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-2.5-pro"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "google/gemini-3-flash-preview",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-flash-lite",
+                "variant": "low"
+              }
+            ]
+          },
+          "explore": {
+            "model": "google/gemini-3.1-flash-lite",
+            "variant": "minimal",
+            "fallback_models": [
+              {
+                "model": "google/gemini-2.5-flash-lite"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "google/gemini-3.7-flash",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "low"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "google/gemini-3.7-flash",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3-flash-preview",
+                "variant": "medium"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "high"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.5-flash",
+                "variant": "high"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-2.5-pro"
+              }
+            ]
+          },
+          "deep": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "high"
+              }
+            ]
+          },
+          "quick": {
+            "model": "google/gemini-2.5-flash-lite",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-flash-lite",
+                "variant": "minimal"
+              }
+            ]
+          },
+          "writing": {
+            "model": "google/gemini-3.7-flash",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3-flash-preview",
+                "variant": "low"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "google/gemini-3.7-flash",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-flash-lite",
+                "variant": "medium"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "high"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "google/gemini-3.7-flash"
+          },
+          {
+            "model": "google/gemini-3.1-flash-lite"
+          }
+        ]
+      }
+    },
+    {
+      "id": "gpt-api",
+      "name": "GPT API",
+      "shortName": "GP",
+      "vendor": "openai",
+      "description": "Every agent on OpenAI. GPT-5.6 takes the hard calls, Sol runs autonomously, Terra builds, Luna reads.",
+      "requires": [
+        "openai"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "openai/gpt-5.6",
+        "small_model": "openai/gpt-5.6-luna",
+        "agent": {
+          "plan": {
+            "model": "openai/gpt-5.6"
+          },
+          "build": {
+            "model": "openai/gpt-5.6-terra"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "openai/gpt-5.6",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-terra",
+                "variant": "high"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "openai/gpt-5.6-sol",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-terra",
+                "variant": "medium"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "openai/gpt-5.6",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-sol",
+                "variant": "high"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "openai/gpt-5.6-terra",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.4-mini",
+                "variant": "high"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "openai/gpt-5.6",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-sol",
+                "variant": "xhigh"
+              }
+            ]
+          },
+          "metis": {
+            "model": "openai/gpt-5.6-terra",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6",
+                "variant": "high"
+              }
+            ]
+          },
+          "momus": {
+            "model": "openai/gpt-5.6",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-terra",
+                "variant": "xhigh"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "openai/gpt-5.6-luna",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.4-nano",
+                "variant": "low"
+              }
+            ]
+          },
+          "explore": {
+            "model": "openai/gpt-5.6-luna",
+            "variant": "none",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.4-nano",
+                "variant": "none"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "openai/gpt-5.6-terra",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-luna",
+                "variant": "low"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "openai/gpt-5.4-mini",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-terra",
+                "variant": "medium"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "openai/gpt-5.6-terra",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6",
+                "variant": "high"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "openai/gpt-5.6-sol",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6",
+                "variant": "high"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "openai/gpt-5.6-sol",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6",
+                "variant": "xhigh"
+              }
+            ]
+          },
+          "deep": {
+            "model": "openai/gpt-5.6-sol",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-terra",
+                "variant": "high"
+              }
+            ]
+          },
+          "quick": {
+            "model": "openai/gpt-5.4-nano",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-luna",
+                "variant": "low"
+              }
+            ]
+          },
+          "writing": {
+            "model": "openai/gpt-5.6-luna",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.4-mini",
+                "variant": "low"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "openai/gpt-5.4-mini",
+            "variant": "low",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-luna",
+                "variant": "medium"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "openai/gpt-5.6",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6-sol",
+                "variant": "high"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "openai/gpt-5.6-terra"
+          },
+          {
+            "model": "openai/gpt-5.6-luna"
+          }
+        ]
+      }
+    },
+    {
+      "id": "claude-api",
+      "name": "Claude API",
+      "shortName": "CL",
+      "vendor": "anthropic",
+      "description": "Every agent on Anthropic. Opus 5 does the thinking, Sonnet 5 does the building, Haiku 4.5 does the reading, Fable 5 does the prose.",
+      "requires": [
+        "anthropic"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "anthropic/claude-opus-5",
+        "small_model": "anthropic/claude-haiku-4-5",
+        "agent": {
+          "plan": {
+            "model": "anthropic/claude-opus-5"
+          },
+          "build": {
+            "model": "anthropic/claude-sonnet-5"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-4-8",
+                "variant": "max"
+              },
+              {
+                "model": "anthropic/claude-sonnet-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-4-8",
+                "variant": "max"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-4-6"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-4-8",
+                "variant": "xhigh"
+              }
+            ]
+          },
+          "metis": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "momus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-4-8",
+                "variant": "max"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "anthropic/claude-haiku-4-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-4-6",
+                "variant": "low"
+              }
+            ]
+          },
+          "explore": {
+            "model": "anthropic/claude-haiku-4-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-4-6",
+                "variant": "low"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-haiku-4-5"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-4-6"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "anthropic/claude-sonnet-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "anthropic/claude-fable-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-4-8",
+                "variant": "max"
+              }
+            ]
+          },
+          "deep": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "quick": {
+            "model": "anthropic/claude-haiku-4-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-4-6",
+                "variant": "low"
+              }
+            ]
+          },
+          "writing": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-fable-5",
+                "variant": "medium"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-haiku-4-5"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-sonnet-5",
+                "variant": "max"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "anthropic/claude-sonnet-5"
+          },
+          {
+            "model": "anthropic/claude-haiku-4-5"
+          }
+        ]
+      }
+    },
+    {
+      "id": "omo-recommended",
+      "name": "oh-my-openagent recommended",
+      "shortName": "OMO",
+      "vendor": "mixed",
+      "description": "The line-up oh-my-openagent publishes for itself: Opus 5 orchestrates, Fable plans, GPT-5.6 reviews, and the cheap models do the looking. Sisyphus-Junior is left to category routing, as its author intends.",
+      "requires": [
+        "anthropic",
+        "openrouter",
+        "google"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "source": {
+        "name": "oh-my-openagent",
+        "url": "https://omo.dev/",
+        "note": "Per-agent and per-category models as published on omo.dev, resolved to ids this opencode can reach."
+      },
+      "opencode": {
+        "model": "anthropic/claude-opus-5",
+        "small_model": "anthropic/claude-haiku-4-5",
+        "agent": {
+          "plan": {
+            "model": "anthropic/claude-opus-5"
+          },
+          "build": {
+            "model": "anthropic/claude-sonnet-4-6"
+          },
+          "explore": {
+            "model": "openrouter/openai/gpt-5.6-luna"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high"
+          },
+          "prometheus": {
+            "model": "anthropic/claude-fable-5",
+            "variant": "xhigh"
+          },
+          "atlas": "anthropic/claude-sonnet-4-6",
+          "hephaestus": {
+            "model": "openrouter/openai/gpt-5.6-sol",
+            "variant": "medium"
+          },
+          "oracle": {
+            "model": "openrouter/openai/gpt-5.5",
+            "variant": "high"
+          },
+          "librarian": "openrouter/openai/gpt-5.6-luna",
+          "explore": "openrouter/openai/gpt-5.6-luna",
+          "metis": "anthropic/claude-sonnet-4-6",
+          "momus": {
+            "model": "openrouter/openai/gpt-5.6-sol",
+            "variant": "xhigh"
+          },
+          "multimodal-looker": {
+            "model": "openrouter/openai/gpt-5.5",
+            "variant": "medium"
+          }
+        },
+        "categories": {
+          "visual-engineering": "google/gemini-3.1-pro-preview",
+          "ultrabrain": {
+            "model": "openrouter/openai/gpt-5.6-sol",
+            "variant": "xhigh"
+          },
+          "artistry": "google/gemini-3.1-pro-preview",
+          "quick": "openrouter/openai/gpt-5.6-luna",
+          "deep": {
+            "model": "openrouter/openai/gpt-5.6-terra",
+            "variant": "xhigh"
+          },
+          "writing": "openrouter/moonshotai/kimi-k2.5",
+          "git": "anthropic/claude-haiku-4-5"
+        }
+      }
+    },
+    {
+      "id": "mixed-daily",
+      "name": "Daily work",
+      "shortName": "DW",
+      "vendor": "mixed",
+      "description": "Opus 5 as the brain with Gemini underneath every agent, so a rate limit at Anthropic slows you down instead of stopping you.",
+      "requires": [
+        "anthropic",
+        "google"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "anthropic/claude-opus-5",
+        "small_model": "anthropic/claude-haiku-4-5",
+        "agent": {
+          "plan": {
+            "model": "anthropic/claude-opus-5"
+          },
+          "build": {
+            "model": "anthropic/claude-sonnet-5"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "medium"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "metis": {
+            "model": "anthropic/claude-sonnet-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-5",
+                "variant": "max"
+              },
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "momus": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "anthropic/claude-haiku-4-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3-flash-preview",
+                "variant": "low"
+              }
+            ]
+          },
+          "explore": {
+            "model": "anthropic/claude-haiku-4-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-flash-lite",
+                "variant": "minimal"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "low"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.7-flash",
+                "variant": "medium"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "anthropic/claude-sonnet-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              },
+              {
+                "model": "anthropic/claude-opus-5",
+                "variant": "max"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-5",
+                "variant": "max"
+              },
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "deep": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "anthropic/claude-sonnet-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-fable-5",
+                "variant": "high"
+              }
+            ]
+          },
+          "quick": {
+            "model": "anthropic/claude-haiku-4-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3-flash-preview",
+                "variant": "minimal"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3-flash-preview",
+                "variant": "low"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "anthropic/claude-opus-5",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
+          "writing": {
+            "model": "anthropic/claude-sonnet-5",
+            "fallback_models": [
+              {
+                "model": "google/gemini-3-flash-preview",
+                "variant": "low"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "google/gemini-3-flash-preview"
+          },
+          {
+            "model": "google/gemini-3.1-pro-preview"
+          }
+        ]
+      }
+    }
+  ]
+}
