@@ -109,7 +109,10 @@ atomic_write() {
   # Follow the link and write what it points at; renaming over the link itself
   # detaches a dotfiles-managed config from whatever manages it.
   dest="$(readlink -f "$dest" 2>/dev/null || printf '%s' "$dest")"
-  tmp="$(dirname "$dest")/.$(basename "$dest").oc-tmp.$$"
+  # mktemp, not a name built from $PID: a predictable temp path is a symlink
+  # someone else can plant to redirect this write somewhere it should not go.
+  # mktemp creates it O_EXCL, so the redirect cannot win the race either.
+  tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").XXXXXXXX" 2>/dev/null)" || return 1
   cat > "$tmp" || { rm -f "$tmp"; return 1; }
   [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
   if [ -e "$dest" ]; then chmod --reference="$dest" "$tmp" 2>/dev/null || true; fi

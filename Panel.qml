@@ -38,6 +38,12 @@ Panel {
   readonly property bool showModelMeta: setting("showModelMeta", true) !== false
   readonly property string configDir: String(setting("configDir", ""))
 
+  // Byte ceilings. Everything read into this shell is bounded before it is
+  // parsed: the catalog is regenerated from the network, and a process can
+  // always be made to print more than anyone expected.
+  readonly property int maxCatalogBytes: 12 * 1024 * 1024
+  readonly property int maxOutputBytes: 4 * 1024 * 1024
+
   readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
   readonly property var actionEnv: ({
     "OC_MANAGE_OHMY": root.manageOhMyOpenAgent ? "1" : "0",
@@ -113,9 +119,9 @@ Panel {
   readonly property string tooltipText: {
     if (root.configBroken) return root.errorMessage
     if (!root.activeProfile) return "No profile matches the live config"
-    var head = root.activeProfile.name
+    var head = root.plain(root.activeProfile.name)
     if (root.drift) head += ", edited"
-    return head + " — " + Model.summary(root.activeProfile)
+    return head + " — " + root.plain(Model.summary(root.activeProfile))
   }
 
   // ---- Lifecycle ---------------------------------------------------------
@@ -141,7 +147,7 @@ Panel {
 
   Component.onCompleted: {
     templatesFile.reload()
-    catalogFile.reload()
+    root.loadCatalog()
     Qt.callLater(root.reload)
   }
 
@@ -555,7 +561,7 @@ Panel {
             if (root.profiles[i].id !== id) continue
             confirm.intent = "apply"
             confirm.subjectId = id
-            confirm.message = "Switch to “" + root.profiles[i].name + "”?"
+            confirm.message = "Switch to “" + root.plain(root.profiles[i].name) + "”?"
             confirm.confirmText = "Switch"
             confirm.cancelText = "Stay"
             confirm.selectedIndex = 0
@@ -687,7 +693,7 @@ Panel {
   function askDelete(profile) {
     confirm.intent = "delete"
     confirm.subjectId = profile.id
-    confirm.message = "Delete “" + profile.name + "”?"
+    confirm.message = "Delete “" + root.plain(profile.name) + "”?"
     confirm.confirmText = "Delete"
     confirm.cancelText = "Keep it"
     confirm.selectedIndex = 0
@@ -741,6 +747,7 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (!Model.withinLimit(text, root.maxOutputBytes)) return
         var parsed = Model.parseJson(text, null)
         if (parsed && Array.isArray(parsed.profiles)) {
           root.store = parsed
@@ -768,6 +775,7 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        if (!Model.withinLimit(text, root.maxOutputBytes)) return
         var parsed = Model.parseJson(text, null)
         if (!parsed) return
         root.detected = parsed
@@ -811,7 +819,7 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var res = Model.parseJson(text, null)
+        var res = Model.withinLimit(text, root.maxOutputBytes) ? Model.parseJson(text, null) : null
         if (res && res.ok === false) {
           root.setError(res.code, res.message, res.file || "")
         } else if (res) {
@@ -826,7 +834,10 @@ Panel {
     }
     stderr: StdioCollector {
       waitForEnd: true
-      onStreamFinished: if (String(text || "").trim() !== "") console.warn("opencode-configs:", String(text).trim())
+      onStreamFinished: {
+        var t = String(text || "").trim()
+        if (t !== "") console.warn("opencode-configs:", t.substring(0, 2000))
+      }
     }
     onExited: function (code) {
       // A crash before the collector settles would otherwise leave the panel
@@ -849,8 +860,9 @@ Panel {
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
+        // One status word is all this prints; anything longer is not from us.
         catalogSync.force = false
-        catalogFile.reload()
+        if (Model.withinLimit(text, 4096)) root.loadCatalog()
       }
     }
   }
@@ -865,27 +877,68 @@ Panel {
     watchChanges: false
     printErrors: false
     onLoaded: {
-      var doc = Model.parseJson(text(), null)
+      var raw = text()
+      if (!Model.withinLimit(raw, root.maxCatalogBytes)) { root.templates = []; return }
+      var doc = Model.parseJson(raw, null)
       root.templates = (doc && Array.isArray(doc.templates)) ? doc.templates : []
     }
     onLoadFailed: root.templates = []
   }
+
+  // The size is checked in a subprocess before FileView is ever pointed at the
+  // file. Refusing after text() has already returned is too late: the read
+  // itself is the allocation, and omarchy-shell is shared by every plugin.
+  Process {
+    id: catalogProbe
+    property string target: ""
+    command: ["stat", "-c", "%s", catalogProbe.target]
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var n = parseInt(String(text || "").trim(), 10)
+        if (!isFinite(n) || n <= 0) return
+        if (n > root.maxCatalogBytes) {
+          console.warn("opencode-configs: model list is", n, "bytes; refusing to load it")
+          return
+        }
+        catalogFile.path = catalogProbe.target
+        catalogFile.reload()
+      }
+    }
+  }
+
+  function loadCatalog() {
+    if (catalogProbe.running) return
+    catalogProbe.target = root.catalogPath
+    catalogProbe.running = true
+  }
+
+  readonly property string catalogPath:
+    (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache"))
+    + "/omarchy/oliwier.opencode-configs/models.json"
 
   FileView {
     id: catalogFile
     // Honour XDG_CACHE_HOME exactly as bin/sync-models.sh does; disagreeing
     // with it meant the panel never found the file the script had just written.
     property bool syncTried: false
-    path: (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache"))
-          + "/omarchy/oliwier.opencode-configs/models.json"
+    // Set by loadCatalog() only after the size probe passes.
+    path: ""
     watchChanges: true
     printErrors: false
     onLoaded: {
-      var c = Catalog.fromText(text())
+      var raw = text()
+      // Refuse rather than parse. The picker stays usable on the bundled list,
+      // and a model id typed by hand is as valid as one picked from a list.
+      if (!Model.withinLimit(raw, root.maxCatalogBytes)) {
+        console.warn("opencode-configs: model list is larger than", root.maxCatalogBytes, "bytes; ignoring it")
+        return
+      }
+      var c = Catalog.fromText(raw)
       root.catalog = c
       root.catalogIndex = Catalog.byId(c)
     }
-    onFileChanged: reload()
+    onFileChanged: root.loadCatalog()
     onLoadFailed: {
       // Build one, once: retrying on every failure turns an offline first run into an
       // unbounded spawn loop. An explicit refresh clears the latch.
@@ -903,6 +956,14 @@ Panel {
     repeat: true
     triggeredOnStart: false
     onTriggered: catalogSync.running = true
+  }
+
+  // ConfirmDialog's message and the bar tooltip are shell components that do
+  // not set textFormat, so they default to AutoText — rich text, which will
+  // fetch what a crafted string points at. Names come from a JSON file that a
+  // second machine or a hand edit can write, so they are flattened first.
+  function plain(s) {
+    return String(s || "").replace(/[<>&]/g, " ").replace(/\s+/g, " ").trim()
   }
 
   function basename(path) {

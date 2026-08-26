@@ -128,6 +128,15 @@ jq -c --rawfile reach "$REACH" '
   | .totalCount = (.models | length)
 ' "$RAW" > "$OUT.new" 2>/dev/null
 
+# Producer-side ceiling. The panel refuses an oversized catalog too, but the
+# cheaper place to stop it is before it is ever written.
+MAX_OUT_BYTES="${MAX_OUT_BYTES:-12582912}"
+if [ -s "$OUT.new" ] && [ "$(stat -c %s "$OUT.new" 2>/dev/null || echo 0)" -gt "$MAX_OUT_BYTES" ]; then
+  rm -f "$OUT.new"
+  [ -s "$OUT" ] || { echo offline; exit 1; }
+  echo stale; exit 0
+fi
+
 if [ -s "$OUT.new" ] && jq -e '.models | length > 0' "$OUT.new" >/dev/null 2>&1; then
   mv -f "$OUT.new" "$OUT"
 else
