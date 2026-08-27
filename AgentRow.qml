@@ -83,6 +83,7 @@ Item {
           spacing: Style.spacing.sm
 
           Text {
+            textFormat: Text.PlainText
             anchors.verticalCenter: parent.verticalCenter
             // A row the user has touched but not saved. Three pixels of accent
             // is enough to count them without reading them.
@@ -215,6 +216,7 @@ Item {
               }
 
               Text {
+                textFormat: Text.PlainText
                 anchors.verticalCenter: parent.verticalCenter
                 text: "󰅖"
                 color: chipHover.hovered ? Color.urgent : root.veryMuted

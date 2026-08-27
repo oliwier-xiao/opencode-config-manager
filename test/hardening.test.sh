@@ -82,7 +82,23 @@ echo "=== a killed switch is all of itself or none of it ==="
 D=$(mk killed)
 cp "$REPO/test/fixtures/omo.jsonc" "$D/omo/omo.jsonc"
 printf '{"$schema":"x","plugin":["oh-my-openagent@latest"],"model":"anthropic/claude-sonnet-5"}' > "$D/cfg/opencode.json"
-SLOW="$ROOT/oc-slow"; sed 's|^\( *\)wrote+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")|&\n\1sleep 4|' "$OC" > "$SLOW"; chmod +x "$SLOW"
+# The stalling copy stays inside a bin/ that has the helpers, or every command
+# would refuse for the wrong reason and the test would pass without testing.
+SLOWSW="$ROOT/slowsw"; mkdir -p "$SLOWSW"
+cp "$REPO/bin/safe-read" "$REPO/bin/safe-write" "$REPO/bin/jsonc-edit" "$SLOWSW/"
+python3 - "$OC" "$SLOWSW/oc-profiles" <<'PYEOF'
+import sys, pathlib
+s = pathlib.Path(sys.argv[1]).read_text()
+out = []
+for line in s.split("\n"):
+    out.append(line)
+    if 'wrote+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")' in line:
+        out.append("    sleep 4")
+pathlib.Path(sys.argv[2]).write_text("\n".join(out))
+PYEOF
+chmod +x "$SLOWSW"/*
+SLOW="$SLOWSW/oc-profiles"
+grep -q "sleep 4" "$SLOW" && ok "the stalling copy was built" || no "the stalling copy was built" "unpatched"
 OC_PROFILE_JSON='{"id":"two","name":"Two","targets":[
  {"file":"ohmy","shape":"oh-my-openagent","manages":["agents"],"payload":{"agents":{"sisyphus":"anthropic/claude-opus-5"}}},
  {"file":"opencode","shape":"opencode","manages":["model"],"payload":{"model":"anthropic/claude-opus-5"}}]}' \
@@ -107,6 +123,38 @@ run "$D" detect >/dev/null 2>&1
 LEAK=$(grep -rl "sk-SECRET-CANARY" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null \
   | grep -v "/cfg/" | grep -vF "$REPO" | head -3)
 [ -z "$LEAK" ] && ok "no temp file holds the provider key" || no "no temp file holds the provider key" "$LEAK"
+
+echo "=== a killed run leaves no staged file behind ==="
+D=$(mk killtemp)
+printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"sk-CANARY-XYZ"}}}}' > "$D/cfg/opencode.json"
+# A copy that stalls after the temporaries exist, kept inside bin/ so the helpers
+# next to it are still found.
+SLOWBIN="$ROOT/slowbin"; mkdir -p "$SLOWBIN"
+cp "$REPO/bin/safe-read" "$REPO/bin/safe-write" "$REPO/bin/jsonc-edit" "$SLOWBIN/"
+python3 - "$OC" "$SLOWBIN/oc-profiles" <<'PYEOF'
+import sys, pathlib
+s = pathlib.Path(sys.argv[1]).read_text()
+out = []
+for line in s.split("\n"):
+    out.append(line)
+    if 'home_src="$(read_capped "$HOME_CFG"' in line:
+        out.append("  sleep 6")
+pathlib.Path(sys.argv[2]).write_text("\n".join(out))
+PYEOF
+chmod +x "$SLOWBIN"/*
+OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" XDG_CACHE_HOME="$D/cache"   XDG_STATE_HOME="$D/state" OC_AUTO_RELOAD=0 OC_TIMEBOXED=1   timeout -k 2 2 "$SLOWBIN/oc-profiles" detect >/dev/null 2>&1
+[ -s "$SLOWBIN/oc-profiles" ] && grep -q "sleep 6" "$SLOWBIN/oc-profiles" \
+  && ok "the stalling copy was built" || no "the stalling copy was built" "empty or unpatched"
+is "nothing staged survives"    "$(find "$D/cache" -name '.stage.*' 2>/dev/null | wc -l)" "0"
+LEFT=$(grep -rl "sk-CANARY-XYZ" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null   | grep -v "/cfg/" | grep -vF "$REPO" | grep -vF "$ROOT" | wc -l)
+is "and no provider key with it" "$LEFT" "0"
+
+echo "=== a missing helper says so plainly ==="
+BARE="$ROOT/bare"; mkdir -p "$BARE"; cp "$OC" "$BARE/oc-profiles"; chmod +x "$BARE/oc-profiles"
+ERR=$("$BARE/oc-profiles" detect 2>&1 >/dev/null); rc=$?
+case "$ERR" in *"is missing or not executable"*) ok "names the missing helper" ;;
+  *) no "names the missing helper" "said: $ERR" ;; esac
+is "and exits 1, not a refusal" "$rc" "1"
 
 echo "=== the two places that carry a version agree ==="
 MV=$(jq -r .version "$REPO/manifest.json")

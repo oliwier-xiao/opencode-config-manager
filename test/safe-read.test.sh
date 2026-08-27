@@ -71,6 +71,35 @@ printf 'abc' > "$D/grow.json"
 out="$("$SR" "$D/grow.json" --max-bytes 100)"
 is "no trailing surprise" "$out" "abc"
 
+# ---------------------------------------------------------------- safe-write
+SW="$REPO/bin/safe-write"
+echo "--- safe-write ---"
+printf 'one' > "$D/w.json"
+printf 'two' | "$SW" "$D/w.json"
+is "replaces content"            "$(cat "$D/w.json")" "two"
+is "no temp left behind"         "$(ls -a "$D" | grep -c '^\.w\.json\.')" "0"
+
+ln -s "$D/w.json" "$D/wlink.json"
+printf 'three' | "$SW" "$D/wlink.json" >/dev/null 2>&1
+is "a symlink is refused by default" "$?" "2"
+is "and the target is untouched"     "$(cat "$D/w.json")" "two"
+printf 'three' | "$SW" "$D/wlink.json" --follow
+is "--follow writes the target"      "$(cat "$D/w.json")" "three"
+
+printf 'x' > "$D/perm.json"; chmod 0644 "$D/perm.json"
+printf 'y' | "$SW" "$D/perm.json"
+is "mode is preserved"           "$(stat -c %a "$D/perm.json")" "644"
+printf 'z' | "$SW" "$D/fresh.json"
+is "a new file is private"       "$(stat -c %a "$D/fresh.json")" "600"
+
+printf '' | "$SW" "$D/w.json" >/dev/null 2>&1
+is "an empty write is refused"   "$?" "2"
+is "and leaves the file alone"   "$(cat "$D/w.json")" "three"
+
+mkfifo "$D/wfifo.json"
+timeout 5 sh -c "printf 'q' | '$SW' '$D/wfifo.json'" >/dev/null 2>&1
+is "a FIFO destination is refused" "$?" "2"
+
 echo
 [ "$fail" -eq 0 ] && echo "$pass passed" || echo "FAILED $fail / $pass passed"
 exit $([ "$fail" -eq 0 ] && echo 0 || echo 1)

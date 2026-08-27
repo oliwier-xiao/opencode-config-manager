@@ -109,14 +109,47 @@ does exactly that, through one place — `bin/safe-read`.
 - `test/hardening.test.sh` holds each of the above as a test, including a killed
   two-file switch and a canary provider key that must not survive in a temp file.
 
+Then a second pass, against the rest of the standard the same reviewer applies across
+the marketplace — the classes he blocks on most often, in descending order of how
+often they appear in his review comments:
+
+- **Every writable text sink is `Text.PlainText`.** It is his single most frequent
+  one-line blocker. Every `Text` in this plugin now sets it, and the shell's own
+  components — `PanelHero` and friends, whose internals are not ours to set it on —
+  are handed strings through `Model.plain()`, which takes the markup and the control
+  characters out. A profile name comes from a file on disk somebody else can write.
+- **Byte ceilings sit at the end the bytes come out of**, not after a `StdioCollector`
+  has already materialised the whole thing inside the shell. `oc-profiles backups`
+  was unbounded and read each manifest by name; the model sync bounded neither
+  `opencode models` nor the download.
+- **The network path.** No redirects to follow (`--proto '=https'`, no `-L`), a
+  `--max-filesize` ceiling, and the downloaded file validated on a descriptor before
+  it is parsed — because `--max-filesize` is not a hard bound when a response has no
+  usable declared length. `--compressed` is gone: a bounded download that expands
+  without bound is not bounded.
+- **Writes go through `bin/safe-write`**: an `O_EXCL`, `O_NOFOLLOW`, mode 0600
+  temporary in the destination's own directory, `fsync`, `rename`, and an `fsync` of
+  the directory so the rename is durable too. A destination that is not a regular
+  file this user owns is refused. The staging names are unpredictable — `.new` and
+  `.tmp` beside the real file are neither.
+- **Settings are range-checked at both ends.** `catalogRefreshHours` reached a Timer
+  as `NaN` if `shell.json` held something that was not a number.
+- **A missing helper says which one.** Without this, every command refused with a
+  story about the profile store.
+
+One of these was a bug in the pass above it: `mktemp_tracked` and `stage` are called
+inside `$( )`, so their appends to the cleanup array happened in a subshell and never
+reached the trap. Cleanup is by filename prefix now, and the test that covers it
+builds a copy that really does stall and really does get killed.
+
 ### Added
 
 - `bin/jsonc-edit` — the comment-preserving reader and writer the above depends on.
   No new dependency: `python3` was already required.
-- `bin/safe-read` — the one place a file is opened, judged and read. Everything else
-  goes through it.
-- `test/` — 99 checks over the reader, the hardening above, the row model, the JSONC
-  editor, shape detection and the write path. `test/run.sh` runs them all and fails
+- `bin/safe-read` and `bin/safe-write` — the one place a file is opened, judged and
+  read, and the one place one is replaced. Everything else goes through them.
+- `test/` — 118 checks over the reader and writer, the hardening above, the row
+  model, the JSONC editor, shape detection and the write path. `test/run.sh` runs them all and fails
   if any of them touched your real config.
 
 ### Upgrading

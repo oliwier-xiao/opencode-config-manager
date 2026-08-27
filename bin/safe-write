@@ -1,0 +1,126 @@
+#!/usr/bin/env python3
+"""safe-write — put stdin at a path, or leave the path as it was.
+
+The replacement is what the reviewer's bar asks of a write: an exclusive,
+unpredictable temporary created in the destination's own directory with O_EXCL,
+O_NOFOLLOW and mode 0600, the bytes written and fsync'd, the name moved into place
+with a rename, and the directory itself fsync'd so the rename survives a power cut
+as well as a crash. Nothing is ever written through the destination name, so a
+reader never sees half a file and a symlink planted at the name cannot redirect the
+write into something else.
+
+  safe-write <dest> [--follow] [--mode 0644]
+
+--follow resolves a symlinked destination and writes what it points at, which is
+what someone managing their config from a dotfiles repository asked for by making
+it a link. Without it a symlink at the destination is refused outright; that is the
+right default for the files this plugin owns at predictable paths.
+
+Exit: 0 written. 1 could not write. 2 refused.
+"""
+import errno
+import os
+import stat
+import sys
+
+
+def _refuse(msg):
+    sys.stderr.write("%s\n" % msg)
+    return 2
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.stderr.write(__doc__)
+        return 2
+    dest = argv[1]
+    follow, mode = False, None
+    i = 2
+    while i < len(argv):
+        if argv[i] == "--follow":
+            follow = True; i += 1
+        elif argv[i] == "--mode":
+            mode = int(argv[i + 1], 8); i += 2
+        else:
+            sys.stderr.write("safe-write: unknown option %s\n" % argv[i])
+            return 2
+
+    if os.path.islink(dest):
+        if not follow:
+            return _refuse("%s is a symlink; refusing to write through it" % dest)
+        # Resolve once, here, and use the result for everything below.
+        dest = os.path.realpath(dest)
+
+    directory = os.path.dirname(os.path.abspath(dest)) or "."
+
+    # A destination that already exists must be a regular file this user owns. A
+    # rename over a FIFO or a device would succeed and leak nothing, but something
+    # else being at the name is not a state to write into either way.
+    try:
+        st = os.lstat(dest)
+    except FileNotFoundError:
+        st = None
+    if st is not None:
+        if not stat.S_ISREG(st.st_mode):
+            return _refuse("%s is not a regular file; refusing to replace it" % dest)
+        if st.st_uid != os.getuid():
+            return _refuse("%s is owned by another user" % dest)
+
+    # Keep the mode the file already had; a config someone made group-readable on
+    # purpose should not quietly become private, and a new file starts at 0600.
+    if mode is None:
+        try:
+            mode = stat.S_IMODE(os.lstat(dest).st_mode)
+        except OSError:
+            mode = 0o600
+
+    data = sys.stdin.buffer.read()
+    if not data:
+        return _refuse("refusing to write an empty file over %s" % dest)
+
+    tmp = None
+    try:
+        for _ in range(8):
+            candidate = os.path.join(
+                directory, ".%s.%s" % (os.path.basename(dest), os.urandom(6).hex()))
+            try:
+                fd = os.open(candidate,
+                             os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW
+                             | getattr(os, "O_CLOEXEC", 0), 0o600)
+            except FileExistsError:
+                continue
+            tmp = candidate
+            break
+        else:
+            return _refuse("could not create a temporary file next to %s" % dest)
+
+        with os.fdopen(fd, "wb") as fh:
+            fh.write(data)
+            fh.flush()
+            os.fsync(fh.fileno())
+        os.chmod(tmp, mode)
+        os.rename(tmp, dest)
+        tmp = None
+
+        # The rename is only durable once the directory entry is on disk too.
+        dfd = os.open(directory, os.O_RDONLY | getattr(os, "O_DIRECTORY", 0))
+        try:
+            os.fsync(dfd)
+        finally:
+            os.close(dfd)
+    except OSError as exc:
+        if exc.errno == errno.ELOOP:
+            return _refuse("%s is a symlink; refusing to write through it" % dest)
+        sys.stderr.write("safe-write: %s\n" % exc)
+        return 1
+    finally:
+        if tmp:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

@@ -43,6 +43,7 @@ Window {
       spacing: 10
 
       Text {
+        textFormat: Text.PlainText
         text: band.title
         color: band.fg
         font.pixelSize: 12
@@ -87,6 +88,7 @@ Window {
             }
 
             Text {
+              textFormat: Text.PlainText
               anchors.horizontalCenter: parent.horizontalCenter
               text: modelData.label
               color: band.fg

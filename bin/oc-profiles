@@ -49,6 +49,13 @@ OC_MANAGE_OHMY="${OC_MANAGE_OHMY:-1}"
 OC_MANAGE_OPENCODE="${OC_MANAGE_OPENCODE:-1}"
 OC_AUTO_RELOAD="${OC_AUTO_RELOAD:-1}"
 OC_BACKUPS_KEEP="${OC_BACKUPS_KEEP:-10}"
+# Settings arrive from a JSON file a hand can edit. A count that is not a number, or
+# is zero, would either loop or delete the copy an undo needs.
+case "$OC_BACKUPS_KEEP" in
+  ''|*[!0-9]*) OC_BACKUPS_KEEP=10 ;;
+  *) [ "$OC_BACKUPS_KEEP" -ge 1 ] 2>/dev/null || OC_BACKUPS_KEEP=1
+     [ "$OC_BACKUPS_KEEP" -le 200 ] 2>/dev/null || OC_BACKUPS_KEEP=200 ;;
+esac
 
 # The keys each shape lets a profile own. Nothing outside these lists is ever
 # assigned, deleted, or reordered.
@@ -65,9 +72,13 @@ OHMY_FORBIDDEN_FIELDS='["reasoning","models","displayName","provider"]'
 # including on the SIGTERM the timebox sends. cmd_detect's projections hold whole
 # config documents — provider keys and MCP bearer tokens among them — and a killed
 # run must not leave those sitting in /tmp.
-OC_TEMPS=()
+# By prefix, not by array: mktemp_tracked is called inside $( ), and a subshell's
+# appends never reach the parent — an array here would leave the trap cleaning
+# nothing while appearing to work.
+OC_RUN_TAG="$$-$(date +%s 2>/dev/null || echo 0)"
+OC_TEMP_PREFIX=""   # set by mktemp_tracked on first use
 cleanup_temps() {
-  [ "${#OC_TEMPS[@]}" -gt 0 ] && rm -f "${OC_TEMPS[@]}" 2>/dev/null
+  [ -n "$OC_TEMP_PREFIX" ] && rm -f "$OC_TEMP_PREFIX"* 2>/dev/null
   return 0
 }
 # A switch is all of itself or none of it, and the timebox can end this process in
@@ -95,10 +106,9 @@ trap on_signal INT TERM HUP
 
 # Under $CACHE where possible rather than a shared /tmp, and 0600 either way.
 mktemp_tracked() {
-  local t
-  t="$(mktemp "$CACHE/.tmp.XXXXXXXX" 2>/dev/null)" || t="$(mktemp 2>/dev/null)" || return 1
-  OC_TEMPS+=("$t")
-  printf '%s' "$t"
+  mkdir -p -m 700 "$CACHE" 2>/dev/null || true
+  OC_TEMP_PREFIX="$CACHE/.stage.$OC_RUN_TAG."
+  mktemp "${OC_TEMP_PREFIX}XXXXXXXX" 2>/dev/null
 }
 
 die()  { printf '%s\n' "$*" >&2; exit 1; }
@@ -170,29 +180,22 @@ payload_fingerprint() {
 # the whole new one, never a truncated config opencode may be reading as we write it.
 # atomic_write <dest> [--no-follow]
 #
-# A config is followed: renaming over the link itself would detach a dotfiles-managed
-# file from whatever manages it, and following is what the user asked for by making
-# it a link. Anything this plugin owns is NOT followed — the store is at a path
-# anything running as this user can predict, and a link planted there would turn
-# every profile write into a write wherever it points.
+# A thin front for bin/safe-write, which does the part bash cannot: an O_EXCL,
+# O_NOFOLLOW, 0600 temporary in the destination's own directory, fsync, rename, and
+# an fsync of the directory so the rename is durable too.
+#
+# A config is followed by default: renaming over the link itself would detach a
+# dotfiles-managed file from whatever manages it, and following is what the user
+# asked for by making it a link. --no-follow is for anything this plugin owns at a
+# path anything running as this user can predict, where a link planted at the name
+# would turn the write into a write somewhere else entirely.
 atomic_write() {
-  local dest="$1" follow="${2:-}" tmp
-  if [ "$follow" = "--no-follow" ]; then
-    if [ -L "$dest" ]; then
-      warn "oc-profiles: $dest is a symlink; refusing to write through it"
-      return 1
-    fi
+  local dest="$1" mode="${2:-}"
+  if [ "$mode" = "--no-follow" ]; then
+    "$SELF_DIR/safe-write" "$dest"
   else
-    dest="$(readlink -f "$dest" 2>/dev/null || printf '%s' "$dest")"
+    "$SELF_DIR/safe-write" "$dest" --follow
   fi
-  # mktemp, not a name built from $PID: a predictable temp path is a symlink
-  # someone else can plant to redirect this write somewhere it should not go.
-  # mktemp creates it O_EXCL, so the redirect cannot win the race either.
-  tmp="$(mktemp "$(dirname "$dest")/.$(basename "$dest").XXXXXXXX" 2>/dev/null)" || return 1
-  cat > "$tmp" || { rm -f "$tmp"; return 1; }
-  [ -s "$tmp" ] || { rm -f "$tmp"; return 1; }
-  if [ -e "$dest" ]; then chmod --reference="$dest" "$tmp" 2>/dev/null || true; fi
-  mv -f "$tmp" "$dest" || { rm -f "$tmp"; return 1; }
 }
 
 # The store sits in a directory anything running as this user can write, and `list`
@@ -1295,12 +1298,19 @@ cmd_prefs() {
 
 cmd_backups() {
   ensure_state
-  local out='[]' d
+  local out='[]' d meta_f n=0
+  # Newest first, and no further than the number kept: the list is for the panel's
+  # undo, and an unbounded walk of a directory anything can add to is not one.
   for d in $(ls -1d "$BACKUPS"/*/ 2>/dev/null | sort -r); do
-    [ -f "$d/meta.json" ] || continue
-    out=$(jq -cn --argjson acc "$out" --argjson m "$(jq -c . "$d/meta.json")" '$acc + [$m]')
+    [ "$n" -lt "$OC_BACKUPS_KEEP" ] || break
+    meta_f="$(read_capped "$d/meta.json" "$MAX_BACKUP_BYTES" "a backup manifest")" || continue
+    if jq -e . "$meta_f" >/dev/null 2>&1; then
+      out=$(jq -cn --argjson acc "$out" --slurpfile m "$meta_f" '$acc + [$m[0]]')
+      n=$((n + 1))
+    fi
+    rm -f "$meta_f"
   done
-  printf '%s\n' "$out"
+  printf '%s\n' "$out" | head -c "$MAX_EMIT_BYTES"
 }
 
 usage() {
@@ -1330,6 +1340,13 @@ need jq
 need date
 need flock
 need python3
+need sha256sum
+
+# The helpers are how this reads and writes anything at all. Missing, every command
+# would refuse with a story about the profile store instead of the truth.
+for helper in safe-read safe-write jsonc-edit; do
+  [ -x "$SELF_DIR/$helper" ] || die "oc-profiles: $SELF_DIR/$helper is missing or not executable"
+done
 
 case "${1:-}" in
   detect)   shift; cmd_detect "$@" ;;

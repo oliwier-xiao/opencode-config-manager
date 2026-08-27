@@ -101,12 +101,14 @@ Item {
       width: parent.width
       foreground: root.foreground
       fontFamily: root.fontFamily
-      title: root.activeProfile ? root.activeProfile.name
-           : (root.activeProfileId ? root.activeProfileId : "Custom")
+      // PanelHero is the shell's, so its Text is not ours to set PlainText on.
+      // Everything reaching it is neutralised on the way instead.
+      title: Model.plain(root.activeProfile ? root.activeProfile.name
+           : (root.activeProfileId ? root.activeProfileId : "Custom"))
       meta: {
         if (root.errorCode !== "") return "CONFIG NOT READ"
         if (!root.activeProfile) return "NO PROFILE MATCHES WHAT IS ON DISK"
-        return Model.summary(root.activeProfile).toUpperCase()
+        return Model.plain(Model.summary(root.activeProfile).toUpperCase())
       }
       detail: root.shapeName
 

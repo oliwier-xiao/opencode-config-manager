@@ -33,8 +33,16 @@ Panel {
   readonly property bool confirmSwitch: setting("confirmSwitch", false) === true
   readonly property bool manageOpencodeJson: setting("manageOpencodeJson", true) !== false
   readonly property bool manageOhMyOpenAgent: setting("manageOhMyOpenAgent", true) !== false
-  readonly property int keepBackups: Math.max(1, Number(setting("keepBackups", 10)) || 10)
-  readonly property int catalogRefreshHours: Number(setting("catalogRefreshHours", 24))
+  // Settings come out of shell.json, which is a file a hand can edit. A number that
+  // is not one arrives as NaN, and NaN reaches a Timer interval as NaN — so both
+  // ends are clamped here rather than at each use.
+  function clampSetting(key, fallback, low, high) {
+    var n = Number(root.setting(key, fallback))
+    if (!isFinite(n)) return fallback
+    return Math.min(high, Math.max(low, Math.round(n)))
+  }
+  readonly property int keepBackups: root.clampSetting("keepBackups", 10, 1, 200)
+  readonly property int catalogRefreshHours: root.clampSetting("catalogRefreshHours", 24, 1, 8760)
   readonly property bool showModelMeta: setting("showModelMeta", true) !== false
   readonly property string configDir: String(setting("configDir", ""))
 
@@ -890,7 +898,7 @@ Panel {
     property bool force: false
     command: [root.pluginDir + "/bin/sync-models.sh"]
     environment: ({
-      "TTL": String(Math.max(1, root.catalogRefreshHours) * 3600),
+      "TTL": String(root.catalogRefreshHours * 3600),
       "FORCE": catalogSync.force ? "1" : "0"
     })
     stdout: StdioCollector {
@@ -968,7 +976,7 @@ Panel {
   // On a timer, not on panel open: the three seconds `opencode models` costs must
   // not sit between clicking the bar and seeing the list.
   Timer {
-    interval: Math.max(1, root.catalogRefreshHours) * 3600 * 1000
+    interval: root.catalogRefreshHours * 3600 * 1000
     running: true
     repeat: true
     triggeredOnStart: false

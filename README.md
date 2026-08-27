@@ -39,11 +39,16 @@ to regenerate the image above.
 An Omarchy **Quattro** shell plugin (`bar-widget`). Needs `omarchy-shell`, `opencode`, and the
 `jq`, `python3`, `flock`, `sha256sum` and `pgrep` an Arch install already has.
 
-Every file it reads goes through `bin/safe-read`: one open with `O_NOFOLLOW` and
-`O_NONBLOCK`, the type, owner and size judged on that descriptor rather than on the
-name, and only the bytes that were vouched for read back through it. omarchy-shell is
-one process for the whole desktop, so nothing read on its behalf may block inside
-`open(2)` or be larger than it said it was.
+Every file it reads from outside its own checkout goes through `bin/safe-read`: one
+open with `O_NOFOLLOW` and `O_NONBLOCK`, the type, owner and size judged on that
+descriptor rather than on the name, and only the bytes that were vouched for read back
+through it. Every file it writes goes through `bin/safe-write`: an `O_EXCL`,
+`O_NOFOLLOW`, mode 0600 temporary in the destination's own directory, fsync, rename,
+and an fsync of the directory. omarchy-shell is one process for the whole desktop, so
+nothing read on its behalf may block inside `open(2)` or be larger than it said it
+was. The one exception is `assets/templates.json`, which ships inside the plugin and
+is read by the shell's own `FileView`; anything able to rewrite that can rewrite the
+QML beside it.
 
 ---
 
@@ -260,8 +265,8 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-99 checks over the reader, the hardening, the row model, the JSONC editor, shape
-detection and the write path.
+118 checks over the reader and writer, the hardening, the row model, the JSONC editor,
+shape detection and the write path.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
 a machine that does not have it installed.

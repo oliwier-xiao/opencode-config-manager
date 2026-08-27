@@ -180,6 +180,7 @@ Item {
       }
 
       Text {
+        textFormat: Text.PlainText
         id: chevron
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -469,6 +470,7 @@ Item {
                     // Star first: the only thing in the row you press rather than read,
                     // and it stays put while names change length under the cursor.
                     Text {
+                      textFormat: Text.PlainText
                       id: star
                       anchors.left: parent.left
                       anchors.verticalCenter: parent.verticalCenter
@@ -558,6 +560,7 @@ Item {
                         font.pixelSize: Style.font.caption
                       }
                       Text {
+                        textFormat: Text.PlainText
                         anchors.verticalCenter: parent.verticalCenter
                         visible: modelData.current === true
                         text: "󰄬"
