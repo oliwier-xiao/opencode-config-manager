@@ -6,6 +6,14 @@
 
 set -uo pipefail
 
+# Opening a FIFO blocks inside open(2), before any check can run, and nothing here
+# legitimately takes half a minute, so the run is bounded from the outside rather
+# than guessed at from the inside. The panel already treats any other exit as a crash.
+if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
+  export OC_TIMEBOXED=1
+  exec timeout -k 2 30 "$0" "$@"
+fi
+
 VERSION="1.0.1"
 PLUGIN_ID="oliwier.opencode-configs"
 
@@ -25,7 +33,6 @@ fi
 
 PROFILES="$STATE/profiles.json"
 BACKUPS="$STATE/backups"
-LOCK="$STATE/.lock"
 HOME_CFG="$HOME/.opencode/opencode.json"
 AUTH_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
 
@@ -119,17 +126,94 @@ atomic_write() {
   mv -f "$tmp" "$dest" || { rm -f "$tmp"; return 1; }
 }
 
+# The store sits in a directory anything running as this user can write, and `list`
+# hands it to a panel living inside omarchy-shell — one process for the whole
+# desktop. So it is judged on the descriptor that will be read rather than on its
+# name: a name checked and then opened is a name that can be replaced in between.
+MAX_STORE_BYTES=2097152
+
+# Whatever this prints ends up buffered whole inside omarchy-shell before the panel
+# gets a chance to measure it, so the two commands whose output grows with a file
+# somebody else wrote are capped here, at the end they come out of.
+MAX_EMIT_BYTES=4194304
+
+# safe_open <path> <max-bytes> — leaves the file open on fd 3, or returns non-zero:
+# 1 it is not there, 2 it is not a plain file, is too large, or the name moved.
+safe_open() {
+  local path="$1" cap="$2" meta size dev ino type
+  { exec 3< "$path"; } 2>/dev/null || return 1
+  # /dev/fd/3 is the descriptor, not the name it was opened under, so this is what
+  # will actually be read. Split on a delimiter rather than on spaces: `%F` is
+  # "regular file", two words, and would shift every field along.
+  meta="$(stat -L -c '%s|%d|%i|%F' /dev/fd/3 2>/dev/null)" || { exec 3<&-; return 2; }
+  IFS='|' read -r size dev ino type <<<"$meta"
+  case "$type" in "regular file"|"regular empty file") ;; *) exec 3<&-; return 2 ;; esac
+  case "$size" in ''|*[!0-9]*) exec 3<&-; return 2 ;; esac
+  [ "$size" -le "$cap" ] || { exec 3<&-; return 2; }
+  # lstat, no -L: a symlink's own inode is never its target's, so a mismatch means the
+  # name led somewhere else, or leads somewhere else now. Own code, because this plugin's
+  # own writers rename over the store and that looks identical from here.
+  [ "$dev:$ino" = "$(stat -c '%d:%i' "$path" 2>/dev/null)" ] || { exec 3<&-; return 3; }
+  return 0
+}
+
+# One retry, which is what tells a rename by atomic_write apart from a swap: a writer
+# renames once and is then done, and nothing an attacker plants survives being refused.
+open_store() {
+  local rc=0
+  safe_open "$PROFILES" "$MAX_STORE_BYTES" || rc=$?
+  if [ "$rc" = 3 ]; then
+    rc=0
+    safe_open "$PROFILES" "$MAX_STORE_BYTES" || rc=$?
+  fi
+  return "$rc"
+}
+
+# The store as it will be parsed, capped where it is read rather than after. Callers
+# do the refusing: refuse() here would only exit the substitution it is called from.
+read_store() {
+  open_store || return $?
+  head -c "$MAX_STORE_BYTES" <&3
+  local rc=$?
+  exec 3<&-
+  return $rc
+}
+
+EMPTY_STORE='{"version":1,"state":{"activeProfileId":null,"appliedAt":null,"lastBackup":null,"previousProfileId":null},"favorites":[],"recents":[],"profiles":[]}'
+
+# `>` would follow a symlink and create, or truncate, whatever it points at — and a
+# dangling one looks exactly like "no store yet". link(2) does not follow the name it
+# is creating, so anything already sitting there is an error rather than a target.
+create_store() {
+  local tmp
+  tmp="$(mktemp "$STATE/.profiles.json.XXXXXXXX" 2>/dev/null)" || return 1
+  printf '%s\n' "$EMPTY_STORE" > "$tmp" || { rm -f "$tmp"; return 1; }
+  ln "$tmp" "$PROFILES" 2>/dev/null || { rm -f "$tmp"; return 1; }
+  rm -f "$tmp"
+}
+
 ensure_state() {
   mkdir -p "$STATE" "$BACKUPS" "$CACHE" 2>/dev/null || true
-  [ -s "$PROFILES" ] || printf '%s\n' \
-    '{"version":1,"state":{"activeProfileId":null,"appliedAt":null,"lastBackup":null,"previousProfileId":null},"favorites":[],"recents":[],"profiles":[]}' \
-    > "$PROFILES"
+  local rc=0
+  open_store || rc=$?
+  case "$rc" in
+    0) exec 3<&-
+       # A zero-length store is an interrupted write, not a store. atomic_write
+       # renames into place, so this never writes through the name either.
+       [ -s "$PROFILES" ] || printf '%s\n' "$EMPTY_STORE" | atomic_write "$PROFILES" \
+         || refuse "E_STORE" "Could not initialise the profile store." ;;
+    1) create_store \
+         || refuse "E_STORE" "Could not create the profile store. Something else is at $PROFILES." ;;
+    *) refuse "E_STORE" "The profile store is not a plain file, or is too large to read." ;;
+  esac
 }
 
 # One writer at a time: two switches racing is a user pressing twice, so the second is
-# refused rather than queued.
+# refused rather than queued. The lock is the state directory itself, opened read-only:
+# flock works on any descriptor, and a directory cannot be swapped for a symlink to
+# somebody's file the way a .lock beside the store can — that open truncates.
 take_lock() {
-  exec 9>"$LOCK" 2>/dev/null || return 0
+  exec 9<"$STATE" 2>/dev/null || return 0
   flock -n 9 || refuse "E_BUSY" "Another switch is already running."
 }
 
@@ -281,7 +365,7 @@ cmd_detect() {
         + ($shadows | map({code:"W_SHADOWED", dir:.}))
         + (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent"))
              | map({code:"W_HOME_OVERRIDE", key:., file:$homePath})) )
-    }'
+    }' | head -c "$MAX_EMIT_BYTES"
 }
 
 # ---------------------------------------------------------------- validation
@@ -786,9 +870,17 @@ cmd_list() {
   ohmy_fp="$(fingerprint "$(resolve_ohmy)" "$OHMY_KEYS")"
   opencode_fp="$(fingerprint "$(resolve_opencode)" "$OPENCODE_KEYS")"
 
+  # This is the one command whose output grows with the store, so it is the one that
+  # reads it through the guard rather than by handing jq a path to reopen. Bounding
+  # the input is not enough on its own: jq's pretty-printer turned a 150 KB store
+  # into 174 MB here, so the output is capped as well, and compact.
+  local raw
+  raw="$(read_store)" \
+    || refuse "E_STORE" "The profile store is not a plain file, or is too large to read."
+
   # `matches` makes a switch made outside this panel recognisable rather than reported as
   # damage. No jq `//` near a boolean: `false // true` is `true`, marking clean as drifted.
-  jq --arg ohmy "$ohmy_fp" --arg opencode "$opencode_fp" '
+  printf '%s' "$raw" | jq -c --arg ohmy "$ohmy_fp" --arg opencode "$opencode_fp" '
     . as $root
     | ($root.state.activeProfileId) as $id
     | def clean(p):
@@ -801,7 +893,7 @@ cmd_list() {
                  else ( [ $root.profiles[] | select(.id == $id) ]
                         | if length == 0 then true else (clean(.[0]) | not) end )
                  end )
-  ' "$PROFILES"
+  ' | head -c "$MAX_EMIT_BYTES"
 }
 
 # Favourites and recents live beside the profiles: one file, one writer, nothing second
