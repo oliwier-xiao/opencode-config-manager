@@ -299,6 +299,10 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
 the keys a profile claims.
 
+The first and the last of those it reads under a ceiling, and on the descriptor it opened rather
+than on the name — `omarchy-shell` is one process for every plugin on the desktop, so a file that
+has been swapped for a symlink, a FIFO or a much bigger one is refused before a byte of it is read.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
