@@ -1,3 +1,5 @@
 # Local development only — the live copy is made by dev-sync.sh
 *.log
 .DS_Store
+__pycache__/
+*.pyc

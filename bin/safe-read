@@ -1,0 +1,143 @@
+#!/usr/bin/env python3
+"""safe-read — hand over a file's bytes, or hand over nothing.
+
+omarchy-shell is one process for the whole desktop, so anything read on its behalf
+has to be bounded before it is allocated, and nothing may block inside open(2). A
+name checked and then opened is a name that can be replaced in between, so the name
+is resolved exactly once and every decision is made about the descriptor that
+resolution produced:
+
+  open(O_RDONLY | O_NONBLOCK | O_CLOEXEC [| O_NOFOLLOW])
+  fstat that descriptor  -> regular file, owned by this user, within the cap
+  read at most that many bytes, through that same descriptor
+
+O_NONBLOCK is what makes a FIFO planted at the path return instead of stalling
+inside open(2), where no check can run and only a timeout can help. fstat is on the
+descriptor, never on the name, so there is no second resolution to race.
+
+O_NOFOLLOW is the default and is right for anything this plugin owns and can find
+at a predictable path — its cache, its profile store. It is switched off with
+--follow for the user's own opencode config, which people legitimately symlink out
+of a dotfiles repository; the fstat still refuses a FIFO, a device or an oversized
+file, so what that costs is only the guarantee about *which* regular file was read.
+
+O_NOFOLLOW covers the last component of the path and no more, which is worth being
+exact about: a symlinked ancestor directory still redirects the walk. Closing that
+would mean opening every component with O_NOFOLLOW|O_DIRECTORY, and that breaks the
+ordinary case of ~/.cache living on another disk behind a link. It buys nothing
+here either — anyone able to plant a symlink inside these directories can write the
+file itself, so the ancestor case grants no capability the direct one does not. What
+the checks below are actually for is the shape of what gets read: never a FIFO this
+process stalls inside, never a device, never more bytes than were promised.
+
+  safe-read <path> --max-bytes N [--follow] [--allow-empty] [--label TEXT]
+
+Exit: 0 wrote the bytes to stdout. 1 there is nothing at that path. 2 refused it,
+with the reason on stderr. 3 could not read it.
+"""
+import errno
+import os
+import stat
+import sys
+
+__all__ = ["read_capped", "Refused"]
+
+
+class Refused(Exception):
+    """The path resolved to something that must not be read."""
+
+
+def read_capped(path, max_bytes, follow=False, allow_empty=True, label=None):
+    """Return the file's bytes, or raise. FileNotFoundError means "not there"."""
+    what = label or os.path.basename(path) or path
+    flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, "O_CLOEXEC", 0)
+    if not follow:
+        flags |= os.O_NOFOLLOW
+    try:
+        fd = os.open(path, flags)
+    except FileNotFoundError:
+        raise
+    except OSError as exc:
+        # ELOOP is O_NOFOLLOW refusing a symlink; ENXIO is a FIFO with no writer,
+        # which O_NONBLOCK turns into this instead of a stall.
+        if exc.errno == errno.ELOOP:
+            raise Refused("%s is a symlink" % what)
+        if exc.errno == errno.ENXIO:
+            raise Refused("%s is a pipe, not a file" % what)
+        raise Refused("%s could not be opened: %s" % (what, exc.strerror))
+
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode):
+            raise Refused("%s is not a regular file" % what)
+        if st.st_uid != os.getuid():
+            raise Refused("%s is owned by another user" % what)
+        if st.st_size > max_bytes:
+            raise Refused("%s is %d bytes; refusing to read it" % (what, st.st_size))
+        if st.st_size == 0 and not allow_empty:
+            raise Refused("%s is empty" % what)
+
+        # Exactly the length that was vouched for, so a file being appended to
+        # yields the document that was measured rather than a prefix of a longer
+        # one. The descriptor is the same one fstat just described.
+        remaining = st.st_size
+        chunks = []
+        while remaining > 0:
+            try:
+                chunk = os.read(fd, min(remaining, 1 << 20))
+            except BlockingIOError:
+                break
+            if not chunk:
+                break
+            chunks.append(chunk)
+            remaining -= len(chunk)
+        return b"".join(chunks)
+    finally:
+        os.close(fd)
+
+
+def main(argv):
+    if len(argv) < 2:
+        sys.stderr.write(__doc__)
+        return 2
+    path = argv[1]
+    cap, follow, allow_empty, label = None, False, True, None
+    i = 2
+    while i < len(argv):
+        a = argv[i]
+        if a == "--max-bytes":
+            cap = int(argv[i + 1]); i += 2
+        elif a == "--follow":
+            follow = True; i += 1
+        elif a == "--no-empty":
+            allow_empty = False; i += 1
+        elif a == "--label":
+            label = argv[i + 1]; i += 2
+        else:
+            sys.stderr.write("safe-read: unknown option %s\n" % a)
+            return 2
+    if cap is None:
+        sys.stderr.write("safe-read: --max-bytes is required\n")
+        return 2
+
+    try:
+        data = read_capped(path, cap, follow=follow, allow_empty=allow_empty, label=label)
+    except FileNotFoundError:
+        return 1
+    except Refused as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 2
+    except OSError as exc:
+        sys.stderr.write("%s\n" % exc)
+        return 3
+
+    try:
+        sys.stdout.buffer.write(data)
+        sys.stdout.buffer.flush()
+    except BrokenPipeError:
+        return 3
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

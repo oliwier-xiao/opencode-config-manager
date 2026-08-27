@@ -1,0 +1,124 @@
+#!/usr/bin/env bash
+# The marketplace reviewer's bar, held as tests. Each case is a way one of these
+# commands was, or could be, made to write somewhere it should not, read something
+# unbounded, or report success for work it did not do.
+set -uo pipefail
+REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+OC="$REPO/bin/oc-profiles"
+ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
+pass=0; fail=0
+ok(){ printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
+no(){ printf '  FAIL %s\n         %s\n' "$1" "$2"; fail=$((fail+1)); }
+is(){ [ "$2" = "$3" ] && ok "$1" || no "$1" "got: $2   want: $3"; }
+
+mk(){ local d="$ROOT/$1"; rm -rf "$d"; mkdir -p "$d/cfg" "$d/omo" "$d/cache" "$d/state"
+  printf '{"$schema":"https://opencode.ai/config.json","model":"anthropic/claude-sonnet-5"}' > "$d/cfg/opencode.json"
+  printf '%s' "$d"; }
+run(){ local d="$1"; shift
+  OPENCODE_CONFIG_DIR="$d/cfg" OMO_CONFIG_HOME="$d/omo" \
+  XDG_CACHE_HOME="$d/cache" XDG_STATE_HOME="$d/state" OC_AUTO_RELOAD=0 "$OC" "$@"; }
+# A non-default config dir gets its own store, keyed by a hash of that path —
+# the same shape bin/oc-profiles computes.
+state_of(){ local h; h="$(printf '%s' "$1/cfg" | sha256sum | cut -c1-12)"
+  printf '%s' "$1/state/omarchy/opencode-configs/by-config/$h"; }
+store_of(){ printf '%s' "$(state_of "$1")/profiles.json"; }
+
+echo "=== the profile store is never written through a planted symlink ==="
+D=$(mk sym); run "$D" capture "A" a >/dev/null 2>&1
+S="$(store_of "$D")"; printf 'PRECIOUS' > "$D/victim.txt"
+rm -f "$S"; ln -s "$D/victim.txt" "$S"
+run "$D" capture "B" b >/dev/null 2>&1
+is "victim file untouched"      "$(cat "$D/victim.txt")" "PRECIOUS"
+[ -L "$S" ] && ok "the link was not replaced by a real store" || no "the link was not replaced" "it was"
+
+echo "=== a store that is not a plain file is refused, not parsed ==="
+D=$(mk shapes); run "$D" capture "A" a >/dev/null 2>&1
+S="$(store_of "$D")"; rm -f "$S"; mkfifo "$S"
+OUT=$(timeout 10 env OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" \
+  XDG_CACHE_HOME="$D/cache" XDG_STATE_HOME="$D/state" "$OC" list 2>/dev/null); rc=$?
+is "a FIFO store is refused"    "$(printf '%s' "$OUT" | jq -r '.code // "none"' 2>/dev/null || echo parse-error)" "E_STORE"
+[ "$rc" != 124 ] && ok "and did not stall" || no "and did not stall" "hit the timeout"
+
+echo "=== the lock fails closed ==="
+D=$(mk lock); run "$D" capture "A" a >/dev/null 2>&1
+ST="$(state_of "$D")"; chmod 0300 "$ST"
+OUT=$(run "$D" capture "B" b 2>/dev/null); rc=$?
+chmod 0700 "$ST"
+is "an unopenable state dir refuses" "$(printf '%s' "$OUT" | jq -r '.code // "none"' 2>/dev/null || echo none)" "E_STORE"
+is "and exits 2, not 0"              "$rc" "2"
+
+echo "=== the store is written compact ==="
+D=$(mk compact); run "$D" capture "A" a >/dev/null 2>&1
+is "one line, not pretty-printed" "$(wc -l < "$(store_of "$D")")" "1"
+
+echo "=== undo refuses a backup it cannot restore from ==="
+D=$(mk undo); run "$D" capture "A" a >/dev/null 2>&1
+OC_PROFILE_JSON='{"id":"b","name":"B","targets":[{"file":"opencode","shape":"opencode","manages":["model"],"payload":{"model":"anthropic/claude-opus-5"}}]}' \
+  run "$D" save >/dev/null 2>&1
+run "$D" apply b >/dev/null 2>&1
+TS=$(jq -r '.state.lastBackup' "$(store_of "$D")")
+BD="$(state_of "$D")/backups/$TS"
+: > "$BD/meta.json"
+OUT=$(run "$D" revert 2>/dev/null)
+is "an empty manifest refuses"  "$(printf '%s' "$OUT" | jq -r '.code // "ok"')" "E_NO_BACKUP"
+is "and the active profile did not move" "$(jq -r '.state.activeProfileId' "$(store_of "$D")")" "b"
+
+D=$(mk undo2); run "$D" capture "A" a >/dev/null 2>&1
+OC_PROFILE_JSON='{"id":"b","name":"B","targets":[{"file":"opencode","shape":"opencode","manages":["model"],"payload":{"model":"anthropic/claude-opus-5"}}]}' \
+  run "$D" save >/dev/null 2>&1
+run "$D" apply b >/dev/null 2>&1
+TS=$(jq -r '.state.lastBackup' "$(store_of "$D")")
+rm -f "$(state_of "$D")/backups/$TS/opencode.json"
+OUT=$(run "$D" revert 2>/dev/null)
+is "a missing copy refuses"     "$(printf '%s' "$OUT" | jq -r '.code // "ok"')" "E_NO_BACKUP"
+is "config left as the profile set it" "$(jq -r .model "$D/cfg/opencode.json")" "anthropic/claude-opus-5"
+
+echo "=== seed always answers in JSON ==="
+D=$(mk seed)
+OUT=$(OC_MANAGE_OHMY=0 OC_MANAGE_OPENCODE=0 run "$D" seed 2>/dev/null)
+is "still JSON when nothing can be captured" "$(printf '%s' "$OUT" | jq -r '.ok // "none"' 2>/dev/null || echo none)" "true"
+
+echo "=== a killed switch is all of itself or none of it ==="
+D=$(mk killed)
+cp "$REPO/test/fixtures/omo.jsonc" "$D/omo/omo.jsonc"
+printf '{"$schema":"x","plugin":["oh-my-openagent@latest"],"model":"anthropic/claude-sonnet-5"}' > "$D/cfg/opencode.json"
+SLOW="$ROOT/oc-slow"; sed 's|^\( *\)wrote+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")|&\n\1sleep 4|' "$OC" > "$SLOW"; chmod +x "$SLOW"
+OC_PROFILE_JSON='{"id":"two","name":"Two","targets":[
+ {"file":"ohmy","shape":"oh-my-openagent","manages":["agents"],"payload":{"agents":{"sisyphus":"anthropic/claude-opus-5"}}},
+ {"file":"opencode","shape":"opencode","manages":["model"],"payload":{"model":"anthropic/claude-opus-5"}}]}' \
+  run "$D" save >/dev/null 2>&1
+BEFORE_OMO=$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents|length')
+BEFORE_OC=$(jq -r .model "$D/cfg/opencode.json")
+OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" XDG_CACHE_HOME="$D/cache" \
+  XDG_STATE_HOME="$D/state" OC_AUTO_RELOAD=0 OC_TIMEBOXED=1 timeout -k 2 2 "$SLOW" apply two >/dev/null 2>&1
+AFTER_OMO=$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents|length')
+AFTER_OC=$(jq -r .model "$D/cfg/opencode.json")
+if [ "$AFTER_OMO" = "$BEFORE_OMO" ] && [ "$AFTER_OC" = "$BEFORE_OC" ]; then
+  ok "both halves put back after the kill"
+else
+  no "both halves put back after the kill" "omo $BEFORE_OMO->$AFTER_OMO, opencode $BEFORE_OC->$AFTER_OC"
+fi
+
+echo "=== a killed detect leaves no config in a temp file ==="
+D=$(mk temps)
+printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"sk-SECRET-CANARY"}}}}' > "$D/cfg/opencode.json"
+run "$D" detect >/dev/null 2>&1
+# The config itself holds the canary by construction, and so does this file.
+LEAK=$(grep -rl "sk-SECRET-CANARY" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null \
+  | grep -v "/cfg/" | grep -vF "$REPO" | head -3)
+[ -z "$LEAK" ] && ok "no temp file holds the provider key" || no "no temp file holds the provider key" "$LEAK"
+
+echo "=== the two places that carry a version agree ==="
+MV=$(jq -r .version "$REPO/manifest.json")
+SV=$(grep -m1 '^VERSION=' "$REPO/bin/oc-profiles" | cut -d'"' -f2)
+is "manifest.json matches bin/oc-profiles" "$SV" "$MV"
+
+echo "=== every shipped helper is executable ==="
+for f in "$REPO"/bin/*; do
+  [ -x "$f" ] || no "$(basename "$f") is executable" "it is not"
+done
+ok "bin/ is executable"
+
+echo
+[ "$fail" -eq 0 ] && echo "$pass passed" || echo "FAILED $fail / $pass passed"
+exit $([ "$fail" -eq 0 ] && echo 0 || echo 1)

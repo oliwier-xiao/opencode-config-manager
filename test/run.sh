@@ -13,7 +13,9 @@ for f in "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json" \
 done
 
 rc=0
-for suite in "node $REPO/test/model.test.js" \
+for suite in "bash $REPO/test/safe-read.test.sh" \
+             "bash $REPO/test/hardening.test.sh" \
+             "node $REPO/test/model.test.js" \
              "python3 $REPO/test/jsonc.test.py" \
              "bash $REPO/test/detect.test.sh" \
              "bash $REPO/test/write.test.sh"; do

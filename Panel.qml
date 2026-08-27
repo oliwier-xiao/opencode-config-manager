@@ -150,6 +150,11 @@ Panel {
       return
     }
     root.cursorActive = false
+    // The model cache is published by a rename from sync-models.sh and nothing
+    // watches it any more, so it is re-read on open rather than only on the timer.
+    // The panel is constructed once per shell session; without this, a cache built
+    // after the first open stays invisible for up to catalogRefreshHours.
+    root.loadCatalog()
     root.reload()
   }
 
@@ -867,6 +872,15 @@ Panel {
       if (code !== 0 && code !== 2 && code !== 3) {
         root.busy = false
         actionProc.pending = null
+        // 124 is the timebox, 137 and 143 are the signals behind it. All three
+        // arrive with nothing on stdout, so without this the panel would clear
+        // itself and quietly redraw the state from before the switch — the one
+        // case where doing nothing looks exactly like having done it.
+        root.setError("E_KILLED",
+          code === 124 || code === 137 || code === 143
+            ? "That took too long and was stopped. Your config was not changed."
+            : "Something went wrong and nothing was changed.", "")
+        root.reload()
       }
     }
   }

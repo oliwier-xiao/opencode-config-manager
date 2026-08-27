@@ -61,6 +61,46 @@ OHMY_FORBIDDEN_FIELDS='["reasoning","models","displayName","provider"]'
 
 # ---------------------------------------------------------------- plumbing
 
+# Every temporary this script makes is registered here and removed on the way out,
+# including on the SIGTERM the timebox sends. cmd_detect's projections hold whole
+# config documents — provider keys and MCP bearer tokens among them — and a killed
+# run must not leave those sitting in /tmp.
+OC_TEMPS=()
+cleanup_temps() {
+  [ "${#OC_TEMPS[@]}" -gt 0 ] && rm -f "${OC_TEMPS[@]}" 2>/dev/null
+  return 0
+}
+# A switch is all of itself or none of it, and the timebox can end this process in
+# the middle of one. The in-process rollback cannot run once bash is dead, so the
+# same restore is registered here: the backup directory and the files written so
+# far, put back before the signal is honoured. Cleared once the switch has landed.
+OC_ROLLBACK_DIR=""
+OC_ROLLBACK_WROTE=()
+rollback_writes() {
+  [ -n "$OC_ROLLBACK_DIR" ] || return 0
+  [ "${#OC_ROLLBACK_WROTE[@]}" -gt 0 ] || return 0
+  local l
+  for l in "${OC_ROLLBACK_WROTE[@]}"; do
+    [ -n "$l" ] || continue
+    [ -s "$OC_ROLLBACK_DIR/$l.json" ] || continue
+    "$SELF_DIR/safe-read" "$OC_ROLLBACK_DIR/$l.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$(file_for "$l")" 2>/dev/null || true
+  done
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  return 0
+}
+on_signal() { rollback_writes; cleanup_temps; exit 143; }
+trap cleanup_temps EXIT
+trap on_signal INT TERM HUP
+
+# Under $CACHE where possible rather than a shared /tmp, and 0600 either way.
+mktemp_tracked() {
+  local t
+  t="$(mktemp "$CACHE/.tmp.XXXXXXXX" 2>/dev/null)" || t="$(mktemp 2>/dev/null)" || return 1
+  OC_TEMPS+=("$t")
+  printf '%s' "$t"
+}
+
 die()  { printf '%s\n' "$*" >&2; exit 1; }
 warn() { printf '%s\n' "$*" >&2; }
 
@@ -128,11 +168,23 @@ payload_fingerprint() {
 
 # Temp file in the same directory, then rename(2): a reader sees the whole old file or
 # the whole new one, never a truncated config opencode may be reading as we write it.
+# atomic_write <dest> [--no-follow]
+#
+# A config is followed: renaming over the link itself would detach a dotfiles-managed
+# file from whatever manages it, and following is what the user asked for by making
+# it a link. Anything this plugin owns is NOT followed — the store is at a path
+# anything running as this user can predict, and a link planted there would turn
+# every profile write into a write wherever it points.
 atomic_write() {
-  local dest="$1" tmp
-  # Follow the link and write what it points at; renaming over the link itself
-  # detaches a dotfiles-managed config from whatever manages it.
-  dest="$(readlink -f "$dest" 2>/dev/null || printf '%s' "$dest")"
+  local dest="$1" follow="${2:-}" tmp
+  if [ "$follow" = "--no-follow" ]; then
+    if [ -L "$dest" ]; then
+      warn "oc-profiles: $dest is a symlink; refusing to write through it"
+      return 1
+    fi
+  else
+    dest="$(readlink -f "$dest" 2>/dev/null || printf '%s' "$dest")"
+  fi
   # mktemp, not a name built from $PID: a predictable temp path is a symlink
   # someone else can plant to redirect this write somewhere it should not go.
   # mktemp creates it O_EXCL, so the redirect cannot win the race either.
@@ -149,51 +201,57 @@ atomic_write() {
 # name: a name checked and then opened is a name that can be replaced in between.
 MAX_STORE_BYTES=2097152
 
+# The rest of what this reads, and what it will not read more than. auth.json is
+# only ever mined for key *names*, the home config for three keys, and the
+# oh-my-openagent bundle for a roster — but all four sit at predictable paths that
+# anything running as this user can write, so all four are bounded and read through
+# bin/safe-read rather than handed to jq or python by name.
+MAX_AUTH_BYTES=1048576
+MAX_CONFIG_BYTES=4194304
+MAX_BACKUP_BYTES=4194304
+# The bundle really is this big: 4.19.3 ships a 5.5 MB dist/index.js.
+MAX_PACKAGE_BYTES=67108864
+
 # Whatever this prints ends up buffered whole inside omarchy-shell before the panel
 # gets a chance to measure it, so the two commands whose output grows with a file
 # somebody else wrote are capped here, at the end they come out of.
 MAX_EMIT_BYTES=4194304
 
-# safe_open <path> <max-bytes> — leaves the file open on fd 3, or returns non-zero:
-# 1 it is not there, 2 it is not a plain file, is too large, or the name moved.
-safe_open() {
-  local path="$1" cap="$2" meta size dev ino type
-  { exec 3< "$path"; } 2>/dev/null || return 1
-  # /dev/fd/3 is the descriptor, not the name it was opened under, so this is what
-  # will actually be read. Split on a delimiter rather than on spaces: `%F` is
-  # "regular file", two words, and would shift every field along.
-  meta="$(stat -L -c '%s|%d|%i|%F' /dev/fd/3 2>/dev/null)" || { exec 3<&-; return 2; }
-  IFS='|' read -r size dev ino type <<<"$meta"
-  case "$type" in "regular file"|"regular empty file") ;; *) exec 3<&-; return 2 ;; esac
-  case "$size" in ''|*[!0-9]*) exec 3<&-; return 2 ;; esac
-  [ "$size" -le "$cap" ] || { exec 3<&-; return 2; }
-  # lstat, no -L: a symlink's own inode is never its target's, so a mismatch means the
-  # name led somewhere else, or leads somewhere else now. Own code, because this plugin's
-  # own writers rename over the store and that looks identical from here.
-  [ "$dev:$ino" = "$(stat -c '%d:%i' "$path" 2>/dev/null)" ] || { exec 3<&-; return 3; }
-  return 0
-}
-
-# One retry, which is what tells a rename by atomic_write apart from a swap: a writer
-# renames once and is then done, and nothing an attacker plants survives being refused.
-open_store() {
-  local rc=0
-  safe_open "$PROFILES" "$MAX_STORE_BYTES" || rc=$?
-  if [ "$rc" = 3 ]; then
-    rc=0
-    safe_open "$PROFILES" "$MAX_STORE_BYTES" || rc=$?
-  fi
-  return "$rc"
-}
-
-# The store as it will be parsed, capped where it is read rather than after. Callers
-# do the refusing: refuse() here would only exit the substitution it is called from.
+# Every file this shell reads goes through bin/safe-read: one open with O_NOFOLLOW
+# and O_NONBLOCK, every decision taken on that descriptor rather than on the name,
+# and exactly the bytes that were vouched for read back through it. A name checked
+# and then opened is a name that can be replaced in between — and a FIFO planted at
+# the path stalls inside open(2), where no check can run and only a timeout helps.
+# Because the name is resolved exactly once there is nothing left to race, and so
+# nothing here to retry.
+#
+# Exit: 0 printed it, 1 nothing there, 2 refused, 3 could not read it.
 read_store() {
-  open_store || return $?
-  head -c "$MAX_STORE_BYTES" <&3
-  local rc=$?
-  exec 3<&-
-  return $rc
+  "$SELF_DIR/safe-read" "$PROFILES" --max-bytes "$MAX_STORE_BYTES" --label "the profile store"
+}
+
+# Anything else this reads, into a temporary file the caller then points a tool at.
+# Prints the path on success and nothing on failure; the file is the caller's to
+# remove. --follow because these are the user's own files, which people symlink out
+# of dotfiles repositories on purpose; the descriptor check still refuses a FIFO, a
+# device or an oversized file, so what following costs is only the guarantee about
+# which regular file was read.
+read_capped() {
+  local path="$1" cap="$2" label="$3" tmp
+  tmp="$(mktemp_tracked)" || return 1
+  if "$SELF_DIR/safe-read" "$path" --max-bytes "$cap" --follow --label "$label" > "$tmp" 2>/dev/null; then
+    printf '%s' "$tmp"; return 0
+  fi
+  rm -f "$tmp"; return 1
+}
+
+# jq is never pointed at the store's path. It is fed what the reader vouched for,
+# so a store swapped between two commands cannot be parsed by one of them.
+store_jq() {
+  local raw rc=0
+  raw="$(read_store)" || rc=$?
+  [ "$rc" = 0 ] || return "$rc"
+  printf '%s' "$raw" | jq "$@"
 }
 
 EMPTY_STORE='{"version":1,"state":{"activeProfileId":null,"appliedAt":null,"lastBackup":null,"previousProfileId":null},"favorites":[],"recents":[],"profiles":[]}'
@@ -211,13 +269,12 @@ create_store() {
 
 ensure_state() {
   mkdir -p "$STATE" "$BACKUPS" "$CACHE" 2>/dev/null || true
-  local rc=0
-  open_store || rc=$?
+  local raw rc=0
+  raw="$(read_store)" || rc=$?
   case "$rc" in
-    0) exec 3<&-
-       # A zero-length store is an interrupted write, not a store. atomic_write
+    0) # A zero-length store is an interrupted write, not a store. atomic_write
        # renames into place, so this never writes through the name either.
-       [ -s "$PROFILES" ] || printf '%s\n' "$EMPTY_STORE" | atomic_write "$PROFILES" \
+       [ -n "$raw" ] || printf '%s\n' "$EMPTY_STORE" | atomic_write "$PROFILES" --no-follow \
          || refuse "E_STORE" "Could not initialise the profile store." ;;
     1) create_store \
          || refuse "E_STORE" "Could not create the profile store. Something else is at $PROFILES." ;;
@@ -230,7 +287,9 @@ ensure_state() {
 # flock works on any descriptor, and a directory cannot be swapped for a symlink to
 # somebody's file the way a .lock beside the store can — that open truncates.
 take_lock() {
-  exec 9<"$STATE" 2>/dev/null || return 0
+  # Fail closed. Returning success when the directory cannot be opened would run
+  # the whole switch believing it held a lock it never took.
+  exec 9<"$STATE" || refuse "E_STORE" "Cannot open the profile directory to lock it."
   flock -n 9 || refuse "E_BUSY" "Another switch is already running."
 }
 
@@ -296,19 +355,38 @@ roster_json() {
   local key cache_file oc_agents om_agents om_cats
   key="$(printf '%s|%s' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
   cache_file="$CACHE/roster-$key.json"
-  if [ -s "$cache_file" ]; then cat "$cache_file"; return 0; fi
+  # Read like everything else: through the descriptor, bounded, and refused if it
+  # is not a plain file this user owns. It sits next to the model cache, which
+  # bin/read-catalog goes to the same trouble over.
+  local cached
+  if cached="$("$SELF_DIR/safe-read" "$cache_file" --max-bytes "$MAX_STORE_BYTES" \
+                 --no-empty --label "the roster cache" 2>/dev/null)"; then
+    if printf '%s' "$cached" | jq -e . >/dev/null 2>&1; then printf '%s' "$cached"; return 0; fi
+  fi
 
+  # `opencode generate` is the slowest thing detect does and the outer timebox is
+  # the whole command's budget, not this one probe's. Bounding it here means a
+  # hung opencode costs a roster, not the panel.
+  local probed_oc=0
   oc_agents="$(command -v opencode >/dev/null 2>&1 \
-    && opencode generate 2>/dev/null \
+    && timeout 10 opencode generate 2>/dev/null | head -c "$MAX_PACKAGE_BYTES" \
        | jq -c '[.components.schemas.Config.properties.agent.properties | keys[]]' 2>/dev/null)"
-  case "$oc_agents" in ''|null) oc_agents='[]' ;; esac
+  case "$oc_agents" in
+    ''|null) oc_agents='[]' ;;
+    *) probed_oc=1 ;;
+  esac
 
   om_agents='[]'; om_cats='[]'
   if [ -n "$pkg" ]; then
-    om_agents="$(jq -c '[.properties.agents.properties | keys[]]' \
-      "$pkg/dist/oh-my-opencode.schema.json" 2>/dev/null)"
+    local schema_f bundle_f
+    schema_f="$(read_capped "$pkg/dist/oh-my-opencode.schema.json" "$MAX_PACKAGE_BYTES" "the oh-my-openagent schema")" || schema_f=""
+    if [ -n "$schema_f" ]; then
+      om_agents="$(jq -c '[.properties.agents.properties | keys[]]' "$schema_f" 2>/dev/null)"
+      rm -f "$schema_f"
+    fi
     case "$om_agents" in ''|null) om_agents='[]' ;; esac
-    om_cats="$(python3 - "$pkg/dist/index.js" <<'PYEOF'
+    bundle_f="$(read_capped "$pkg/dist/index.js" "$MAX_PACKAGE_BYTES" "the oh-my-openagent bundle")" || bundle_f=""
+    om_cats="$(python3 - "${bundle_f:-/dev/null}" <<'PYEOF'
 import json, re, sys
 try:
     with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
@@ -320,13 +398,24 @@ m = re.search(r"BuiltinCategoryNameSchema\s*=\s*[A-Za-z_$][\w$]*\.enum\(\s*\[(.*
 print(json.dumps(re.findall(r'"([^"]+)"', m.group(1)) if m else []))
 PYEOF
 )"
+    [ -n "$bundle_f" ] && rm -f "$bundle_f"
     case "$om_cats" in ''|null) om_cats='[]' ;; esac
   fi
 
   local out
   out="$(jq -cn --argjson oca "$oc_agents" --argjson oma "$om_agents" --argjson omc "$om_cats" \
     '{opencode:{agents:$oca}, ohmy:{agents:$oma, categories:$omc}}')"
-  mkdir -p "$CACHE" 2>/dev/null && printf '%s\n' "$out" > "$cache_file" 2>/dev/null || true
+  # Only memoise a probe that actually answered. Caching "I could not ask" pins the
+  # panel to an empty roster until one of the two versions moves, which for a
+  # transient failure could be weeks. --no-follow: this is the plugin's own file at
+  # a predictable path, and a link planted there would redirect the write.
+  if [ "$probed_oc" = 1 ] && [ -n "$pkg" ] && [ "$om_agents" != '[]' ]; then
+    mkdir -p "$CACHE" 2>/dev/null \
+      && printf '%s\n' "$out" | atomic_write "$cache_file" --no-follow 2>/dev/null || true
+  elif [ "$probed_oc" = 1 ] && [ -z "$pkg" ]; then
+    mkdir -p "$CACHE" 2>/dev/null \
+      && printf '%s\n' "$out" | atomic_write "$cache_file" --no-follow 2>/dev/null || true
+  fi
   printf '%s' "$out"
 }
 
@@ -393,11 +482,6 @@ applicable() {
   return 0
 }
 
-# jq reads these itself, from a path: passing a config as an --argjson value would put
-# every provider API key and the MCP bearer token on a command line readable in /proc.
-readable_json() {
-  if [ -r "$1" ] && jq -e . "$1" >/dev/null 2>&1; then printf '%s' "$1"; else printf '%s' /dev/null; fi
-}
 
 # ---------------------------------------------------------------- detect
 
@@ -415,7 +499,12 @@ cmd_detect() {
   omo_version="$([ -n "$omo_pkg" ] && jq -r '.version // ""' "$omo_pkg/package.json" 2>/dev/null || true)"
 
   local authed
-  authed="$(jq -c '[keys[]]' "$AUTH_FILE" 2>/dev/null || printf '[]')"
+  local auth_f; auth_f="$(read_capped "$AUTH_FILE" "$MAX_AUTH_BYTES" "the opencode auth file")" || auth_f=""
+  authed='[]'
+  if [ -n "$auth_f" ]; then
+    authed="$(jq -c '[keys[]]' "$auth_f" 2>/dev/null || printf '[]')"
+    rm -f "$auth_f"
+  fi
 
   # Built without a pipeline: under `set -o pipefail` a pgrep that matches nothing fails
   # the whole pipe, the `||` fallback fires on top of jq's own `[]`, and detect emits `[][]`.
@@ -467,9 +556,15 @@ cmd_detect() {
 
   # The projections go to files rather than onto the command line: a config can
   # hold provider keys and an MCP bearer token, and /proc makes an argv public.
-  local ohmy_doc_f opencode_doc_f
-  ohmy_doc_f="$(mktemp)"; read_projected ohmy > "$ohmy_doc_f"
-  opencode_doc_f="$(mktemp)"; printf '%s' "$opencode_doc" > "$opencode_doc_f"
+  local ohmy_doc_f opencode_doc_f home_doc_f home_src
+  ohmy_doc_f="$(mktemp_tracked)"; read_projected ohmy > "$ohmy_doc_f"
+  opencode_doc_f="$(mktemp_tracked)"; printf '%s' "$opencode_doc" > "$opencode_doc_f"
+  home_doc_f="$(mktemp_tracked)"; printf 'null' > "$home_doc_f"
+  home_src="$(read_capped "$HOME_CFG" "$MAX_CONFIG_BYTES" "the ~/.opencode config")" || home_src=""
+  if [ -n "$home_src" ]; then
+    jq -e . "$home_src" >/dev/null 2>&1 && cp -f "$home_src" "$home_doc_f"
+    rm -f "$home_src"
+  fi
 
   jq -n \
     --arg ohmyPath "$ohmy" \
@@ -492,12 +587,12 @@ cmd_detect() {
     --argjson opencodeExists "$([ -f "$opencode" ] && echo true || echo false)" \
     --argjson homeExists "$([ -f "$HOME_CFG" ] && echo true || echo false)" \
     --argjson ohmyParses "$([ -f "$ohmy" ] && [ "$(read_projected ohmy)" != "null" ] && echo true || echo false)" \
-    --argjson opencodeParses "$(jq -e . "$opencode" >/dev/null 2>&1 && echo true || echo false)" \
+    --argjson opencodeParses "$([ -f "$opencode" ] && [ "$opencode_doc" != "null" ] && echo true || echo false)" \
     --argjson ohmyWritable "$([ -w "$ohmy" ] || [ ! -e "$ohmy" ] && [ -w "$(dirname "$ohmy")" ] && echo true || echo false)" \
     --argjson opencodeWritable "$([ -w "$opencode" ] || [ ! -e "$opencode" ] && [ -w "$(dirname "$opencode")" ] && echo true || echo false)" \
     --slurpfile ohmyDocA "$ohmy_doc_f" \
     --slurpfile opencodeDocA "$opencode_doc_f" \
-    --slurpfile homeDocA "$(readable_json "$HOME_CFG")" \
+    --slurpfile homeDocA "$home_doc_f" \
     '
     ( $ohmyDocA[0]     // null ) as $ohmyDoc     |
     ( $opencodeDocA[0] // null ) as $opencodeDoc |
@@ -559,7 +654,7 @@ cmd_detect() {
              | map({code:"W_HOME_OVERRIDE", key:., file:$homePath})) )
     }' | head -c "$MAX_EMIT_BYTES"
 
-  rm -f "$ohmy_doc_f" "$opencode_doc_f"
+  rm -f "$ohmy_doc_f" "$opencode_doc_f" "$home_doc_f"
 }
 
 # ---------------------------------------------------------------- validation
@@ -623,9 +718,11 @@ preflight_restore() {
 # subshell, and an edit that never landed would still be announced as saved.
 store_update() {
   local next
-  next=$(jq "$@" "$PROFILES") || refuse "E_STORE" "Could not update the profile store."
+  # -c, because jq's pretty-printer triples the size of the thing the reader then
+  # has to fit under MAX_STORE_BYTES.
+  next=$(store_jq -c "$@") || refuse "E_STORE" "Could not read the profile store."
   [ -n "$next" ] || refuse "E_STORE" "Could not update the profile store."
-  printf '%s\n' "$next" | atomic_write "$PROFILES" \
+  printf '%s\n' "$next" | atomic_write "$PROFILES" --no-follow \
     || refuse "E_STORE" "Could not save the profile store."
 }
 
@@ -644,7 +741,7 @@ cmd_apply() {
   take_lock
 
   local profile
-  profile=$(jq -c --arg id "$id" '.profiles[] | select(.id == $id)' "$PROFILES" 2>/dev/null)
+  profile=$(store_jq -c --arg id "$id" '.profiles[] | select(.id == $id)' 2>/dev/null)
   [ -n "$profile" ] || refuse "E_NO_PROFILE" "No profile called \"$id\"."
 
   local targets applied=() skipped=() stamp dir
@@ -668,7 +765,7 @@ cmd_apply() {
   mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
 
   local from_id backup_files='[]'
-  from_id=$(jq -r '.state.activeProfileId // ""' "$PROFILES")
+  from_id=$(store_jq -r '.state.activeProfileId // ""')
 
   # Byte copies, taken before the first write: restoring is a copy back, not a
   # re-serialisation, so an undo returns the file with the user's own formatting.
@@ -691,6 +788,7 @@ cmd_apply() {
   # above, so a switch is all of itself or none of it.
   local wrote=()
   local rc=0
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=()
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
@@ -706,7 +804,7 @@ cmd_apply() {
 
     # Recorded before the write, not after: a write that fails part-way is
     # exactly the one the rollback has to cover.
-    wrote+=("$logical")
+    wrote+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")
     if ! write_projected "$logical" "$payload" "$mkeys" | atomic_write "$file"; then
       rc=1; break
     fi
@@ -716,14 +814,23 @@ cmd_apply() {
 
   if [ "$rc" -ne 0 ]; then
     local l
+    # atomic_write, not `cp`: cp truncates and then streams, so a signal landing
+    # inside it leaves a half-written config — the one outcome this design exists
+    # to prevent, arriving on the path taken when things have already gone wrong.
     for l in "${wrote[@]:-}"; do
       [ -n "$l" ] || continue
-      cp -p "$dir/$l.json" "$(file_for "$l")" 2>/dev/null || true
+      "$SELF_DIR/safe-read" "$dir/$l.json" --max-bytes "$MAX_BACKUP_BYTES" --label "that backup" \
+        2>/dev/null | atomic_write "$(file_for "$l")" 2>/dev/null || true
     done
+    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
     jq -cn --arg backup "$stamp" \
       '{ok:false, code:"E_WRITE", message:"The write failed and the previous config was put back.", backup:$backup}'
     exit 3
   fi
+
+  # Past here the configs on disk are the ones the profile asked for, so a signal
+  # must not put the previous ones back over them.
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
 
   # Stamp the store with fresh fingerprints read back off the files we just
   # wrote, so drift is measured against reality rather than against intent.
@@ -766,7 +873,7 @@ cmd_revert() {
   take_lock
 
   local ts
-  ts="${1:-$(jq -r '.state.lastBackup // ""' "$PROFILES")}"
+  ts="${1:-$(store_jq -r '.state.lastBackup // ""')}"
   [ -n "$ts" ] || refuse "E_NO_BACKUP" "There is no backup to go back to."
   # A backup name is a timestamp this script wrote. Anything else is not a
   # backup, and a path fragment is certainly not one.
@@ -780,7 +887,7 @@ cmd_revert() {
     *) refuse "E_NO_BACKUP" "\"$ts\" is not a backup name." ;;
   esac
   local dir="$BACKUPS/$ts"
-  [ -f "$dir/meta.json" ] || refuse "E_NO_BACKUP" "Backup $ts is gone."
+  [ -s "$dir/meta.json" ] || refuse "E_NO_BACKUP" "Backup $ts is gone or empty."
 
   # A revert is a write like any other, so it gets its own backup first: undo
   # has to be undoable or it is just a second way to lose the config.
@@ -789,7 +896,10 @@ cmd_revert() {
   mkdir -p "$new_dir"
 
   local files logical path
-  files=$(jq -c '.files[]' "$dir/meta.json")
+  local meta_f
+  meta_f="$(read_capped "$dir/meta.json" "$MAX_BACKUP_BYTES" "that backup's manifest")" \
+    || refuse "E_NO_BACKUP" "Backup $ts cannot be read."
+  files=$(jq -c '.files[]' "$meta_f" 2>/dev/null) || { rm -f "$meta_f"; refuse "E_NO_BACKUP" "Backup $ts is not readable any more."; }
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     logical=$(printf '%s' "$f" | jq -r '.logical')
@@ -801,7 +911,7 @@ cmd_revert() {
   done <<< "$files"
 
   local to_id new_files='[]'
-  to_id=$(jq -r '.state.activeProfileId // ""' "$PROFILES")
+  to_id=$(store_jq -r '.state.activeProfileId // ""')
   # Describe the state this backup actually holds, not the one it is undoing.
   # Copying the old meta forward made a backup advertise someone else's digests.
   while IFS= read -r f; do
@@ -829,19 +939,31 @@ cmd_revert() {
     # oh-my-openagent's config lives there — without it an undo silently skipped
     # the whole oh-my-openagent half and still reported success.
     case "$path" in "$CFG_DIR"/*|"$OMO_DIR"/*|"$HOME_CFG") ;; *) continue ;; esac
-    [ -f "$dir/$logical.json" ] || continue
+    # A manifest naming a payload that is not there is a broken backup, not a
+    # backup with less in it. Saying so beats reporting a successful undo that
+    # restored nothing and still moved the active profile.
+    [ -s "$dir/$logical.json" ] \
+      || refuse "E_NO_BACKUP" "Backup $ts is missing the copy of $(basename "$path")."
     preflight_restore "$path" "$dir/$logical.json"
     restorable=$(jq -cn --argjson acc "$restorable" --arg l "$logical" --arg p "$path" \
       '$acc + [{logical:$l, path:$p}]')
   done <<< "$files"
 
+  [ "$(printf '%s' "$restorable" | jq -r 'length')" != "0" ] \
+    || refuse "E_NO_BACKUP" "Backup $ts has nothing in it that can be put back."
+
   local restored='[]' put_back=() rrc=0
+  OC_ROLLBACK_DIR="$new_dir"; OC_ROLLBACK_WROTE=()
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     logical=$(printf '%s' "$entry" | jq -r '.logical')
     path=$(printf '%s' "$entry" | jq -r '.path')
-    put_back+=("$logical")
-    if ! cat "$dir/$logical.json" | atomic_write "$path"; then rrc=1; break; fi
+    put_back+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")
+    # The backup is a byte copy this tool made, but it lives in a directory anything
+    # running as this user can write, so it is read back under the same rules as
+    # everything else rather than cat'd straight over a config.
+    if ! "$SELF_DIR/safe-read" "$dir/$logical.json" --max-bytes "$MAX_BACKUP_BYTES" \
+         --label "that backup" | atomic_write "$path"; then rrc=1; break; fi
     restored=$(jq -cn --argjson acc "$restored" --arg l "$logical" '$acc + [$l]')
   done <<< "$(printf '%s' "$restorable" | jq -c '.[]')"
 
@@ -849,15 +971,20 @@ cmd_revert() {
     local l
     for l in "${put_back[@]:-}"; do
       [ -n "$l" ] || continue
-      [ -f "$new_dir/$l.json" ] && cp -p "$new_dir/$l.json" "$(file_for "$l")" 2>/dev/null || true
+      [ -f "$new_dir/$l.json" ] || continue
+      "$SELF_DIR/safe-read" "$new_dir/$l.json" --max-bytes "$MAX_BACKUP_BYTES" --label "that backup" \
+        2>/dev/null | atomic_write "$(file_for "$l")" 2>/dev/null || true
     done
+    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
     jq -cn --arg backup "$stamp" \
       '{ok:false, code:"E_WRITE", message:"The undo failed and the config was put back as it was.", backup:$backup}'
     exit 3
   fi
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
 
   local back_to
-  back_to=$(jq -r '.fromProfileId // ""' "$dir/meta.json")
+  back_to=$(jq -r '.fromProfileId // ""' "$meta_f" 2>/dev/null)
+  rm -f "$meta_f"
   store_update --arg id "$back_to" --arg prev "$to_id" --arg at "$(now_iso)" --arg backup "$stamp" '
       .state.activeProfileId = (if $id == "" then null else $id end)
     | .state.previousProfileId = (if $prev == "" then null else $prev end)
@@ -882,7 +1009,7 @@ prune_backups() {
   # The backup the store points at is the one Undo restores, so it is never a candidate:
   # with keepBackups 0 the prune would delete the copy taken seconds earlier.
   local keep_ts
-  keep_ts=$(jq -r '.state.lastBackup // ""' "$PROFILES" 2>/dev/null)
+  keep_ts=$(store_jq -r '.state.lastBackup // ""' 2>/dev/null)
 
   local doomed
   doomed=$(ls -1d "$BACKUPS"/*/ 2>/dev/null | sort | head -n "-$OC_BACKUPS_KEEP" 2>/dev/null)
@@ -964,7 +1091,7 @@ cmd_capture() {
     id=$(printf '%s' "$name" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9]+/-/g; s/^-+|-+$//g')
     [ -n "$id" ] || id="profile"
     local base="$id" n=2
-    while jq -e --arg i "$id" 'any(.profiles[]; .id == $i)' "$PROFILES" >/dev/null 2>&1; do
+    while store_jq -e --arg i "$id" 'any(.profiles[]; .id == $i)' >/dev/null 2>&1; do
       id="$base-$n"; n=$((n+1))
     done
   fi
@@ -1024,7 +1151,7 @@ cmd_seed() {
   take_lock
 
   local existing
-  existing=$(jq -r '.profiles | length' "$PROFILES" 2>/dev/null || echo 0)
+  existing=$(store_jq -r '.profiles | length' 2>/dev/null || echo 0)
   if [ "$existing" != "0" ]; then
     jq -cn '{ok:true, seeded:false, reason:"there are already profiles"}'
     return 0
@@ -1042,7 +1169,10 @@ cmd_seed() {
 
   # cmd_capture takes the lock itself, so hand off rather than call it here.
   flock -u 9 2>/dev/null || true
-  cmd_capture "Current config" current-config >/dev/null 2>&1 || {
+  # In a subshell: refuse() is `exit 2`, so calling cmd_capture directly would end
+  # the script here and print its refusal instead of seed's own answer. The capture
+  # writes through the store, so a subshell loses nothing.
+  ( cmd_capture "Current config" current-config ) >/dev/null 2>&1 || {
     jq -cn '{ok:true, seeded:false, reason:"nothing in the config to save"}'
     return 0
   }
@@ -1097,7 +1227,7 @@ cmd_delete() {
   [ -n "$id" ] || die "usage: oc-profiles delete <profile-id>"
   ensure_state
   take_lock
-  jq -e --arg id "$id" 'any(.profiles[]; .id == $id)' "$PROFILES" >/dev/null 2>&1 \
+  store_jq -e --arg id "$id" 'any(.profiles[]; .id == $id)' >/dev/null 2>&1 \
     || refuse "E_NO_PROFILE" "No profile called \"$id\"."
   store_update --arg id "$id" '
       .profiles = (.profiles | map(select(.id != $id)))
@@ -1160,7 +1290,7 @@ cmd_prefs() {
     | .recents   = (($p.recents   // .recents   // []) | map(select(type == "string")) | .[0:8])
   '
 
-  jq -c '{ok:true, favorites:(.favorites|length), recents:(.recents|length)}' "$PROFILES"
+  store_jq -c '{ok:true, favorites:(.favorites|length), recents:(.recents|length)}'
 }
 
 cmd_backups() {

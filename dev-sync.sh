@@ -13,7 +13,7 @@ rsync -a --delete \
   --exclude '.git' --exclude 'dev-sync.sh' --exclude 'mark-preview.qml' \
   --exclude '*.md' --exclude '.gitignore' --exclude 'test' --exclude 'docs' \
   "$SRC/" "$DEST/"
-chmod +x "$DEST/bin/oc-profiles" "$DEST/bin/sync-models.sh" "$DEST/bin/read-catalog" "$DEST/bin/jsonc-edit"
+chmod +x "$DEST"/bin/*
 
 omarchy plugin validate "$DEST"
 

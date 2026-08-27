@@ -13,10 +13,40 @@ the whitespace, comes out the far side unchanged.
 `read` prints the scoped object as compact JSON. `apply` prints the whole new file on
 stdout; the caller decides how it lands on disk.
 """
+import importlib.machinery
+import importlib.util
 import json
+import os
 import sys
 
 WS = " \t\r\n"
+
+# A config can be a symlink into a dotfiles repository, which is a normal thing for
+# someone to have done on purpose, so the name is followed here — but everything
+# else bin/safe-read enforces still applies: one non-blocking open, the decision
+# taken on that descriptor, a size ceiling, and no second look at the name. A FIFO
+# or a device planted at the path is refused rather than stalling this process
+# inside open(2).
+MAX_CONFIG_BYTES = 4 * 1024 * 1024
+
+
+# No .pyc beside the script: this directory is the installed plugin, and a
+# __pycache__ appearing in it after the first edit is noise the shell then ships.
+sys.dont_write_bytecode = True
+
+
+def _load_safe_read():
+    # Explicit loader: the file has no .py suffix, so nothing can be inferred from
+    # the name. Same directory as this script, never a search path.
+    path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "safe-read")
+    loader = importlib.machinery.SourceFileLoader("_safe_read", path)
+    spec = importlib.util.spec_from_file_location("_safe_read", path, loader=loader)
+    mod = importlib.util.module_from_spec(spec)
+    loader.exec_module(mod)
+    return mod
+
+
+_safe = _load_safe_read()
 
 
 class Bad(Exception):
@@ -271,9 +301,14 @@ def main(argv):
             return 1
 
     try:
-        with open(path, encoding="utf-8") as fh:
-            text = fh.read()
-    except OSError as exc:
+        text = _safe.read_capped(path, MAX_CONFIG_BYTES, follow=True).decode("utf-8")
+    except FileNotFoundError:
+        sys.stderr.write("jsonc-edit: %s does not exist\n" % path)
+        return 1
+    except _safe.Refused as exc:
+        sys.stderr.write("jsonc-edit: %s\n" % exc)
+        return 1
+    except (OSError, UnicodeDecodeError) as exc:
         sys.stderr.write("jsonc-edit: %s\n" % exc)
         return 1
 

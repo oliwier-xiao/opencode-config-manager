@@ -60,13 +60,64 @@ carried in this repository.
 - **A template applied under oh-my-openagent carries only the base model across** from
   its opencode half, rather than its `agent` block.
 
+### Hardened
+
+The marketplace reviewer's standing objection, in his words on
+[#2774](https://github.com/HANCORE-linux/omarchy-plugin-marketplace/issues/2774):
+"Open the file once with `O_NOFOLLOW` and `O_NONBLOCK`, validate that descriptor as
+a user-owned regular file, and read the capped bytes through it." Every read here now
+does exactly that, through one place — `bin/safe-read`.
+
+- **Nothing is checked by name and then opened by name.** The previous `safe_open`
+  and `bin/read-catalog` both did `exec 3< "$path"`, which blocks inside `open(2)` on
+  a FIFO planted at the path — before any check can run, with only the outer timeout
+  to end it. A FIFO now returns in milliseconds and is refused.
+- **Every read is bounded and validated on the descriptor**: a regular file, owned by
+  this user, within a byte ceiling. That covers the profile store, the model cache,
+  the roster cache, `auth.json`, `~/.opencode/opencode.json`, both config files, the
+  oh-my-openagent bundle, and every backup payload — previously most of these were
+  handed to `jq` or `python` by name with no ceiling at all.
+- **The profile store is never written through a symlink.** `atomic_write` follows a
+  link by design, which is right for a dotfiles-managed config and wrong for a file
+  this plugin owns at a predictable path; writing there could be redirected into any
+  file the user can write. It now refuses.
+- **The lock fails closed.** `take_lock` returned success when the state directory
+  could not be opened, running the whole switch with no lock at all.
+- **A killed switch is put back.** The timebox can end the process mid-apply, where
+  the in-process rollback cannot run. The same restore is now armed on `SIGTERM`,
+  `SIGINT` and `SIGHUP`, so a two-file switch is never left half-applied.
+- **A killed run no longer leaves config in `/tmp`.** `cmd_detect` writes whole
+  projected documents — provider keys and MCP bearer tokens included — to temporary
+  files so they never reach `argv`. They are now registered and removed on the way
+  out, signals included, and live under the plugin's own cache rather than `/tmp`.
+- **Undo refuses a backup it cannot restore from.** An empty manifest or a missing
+  copy used to report `ok:true` with `restored: []` and still move the active
+  profile. Both now refuse and leave the state alone.
+- **A run stopped by the timebox is visible.** Exit 124, 137 and 143 arrive with
+  nothing on stdout; the panel used to clear itself and quietly redraw the state
+  from before the switch, which looks exactly like having done it.
+- **The rollback paths go through `atomic_write`.** They used `cp`, which truncates
+  and then streams — a signal landing inside one left a half-written config, on the
+  path taken when things have already gone wrong.
+- **The profile store is written compact.** `jq`'s pretty-printer tripled it, so the
+  reader's 2 MB ceiling was really about 700 KB of profile data.
+- **A failed roster probe is not memoised.** One transient failure of
+  `opencode generate` used to pin the panel to an empty agent list until a version
+  bump; the probe also has its own timeout now, instead of spending the whole
+  30-second budget.
+- **`seed` keeps the JSON contract** it shares with every other command.
+- `test/hardening.test.sh` holds each of the above as a test, including a killed
+  two-file switch and a canary provider key that must not survive in a temp file.
+
 ### Added
 
 - `bin/jsonc-edit` — the comment-preserving reader and writer the above depends on.
   No new dependency: `python3` was already required.
-- `test/` — 67 checks over the row model, the JSONC editor, shape detection and the
-  write path. `test/run.sh` runs them all and fails if any of them touched your real
-  config.
+- `bin/safe-read` — the one place a file is opened, judged and read. Everything else
+  goes through it.
+- `test/` — 99 checks over the reader, the hardening above, the row model, the JSONC
+  editor, shape detection and the write path. `test/run.sh` runs them all and fails
+  if any of them touched your real config.
 
 ### Upgrading
 

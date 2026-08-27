@@ -1,24 +1,18 @@
 #!/usr/bin/env bash
 # read-catalog — hands the model cache to the panel, or hands it nothing.
 #
-# omarchy-shell is one process for the whole desktop, so the cache is checked and
-# read through a single open file descriptor. The type and the size that decide
-# whether to read belong to the descriptor that is then read; the name is never
-# resolved a second time for anything to be swapped in between, and exactly as
-# many bytes as were vouched for come out. The panel is not told the path and
-# cannot pass one.
+# The panel is not told the path and cannot pass one. Everything that makes this
+# safe lives in bin/safe-read: one open with O_NOFOLLOW and O_NONBLOCK, every
+# decision taken on that descriptor rather than on the name, and exactly the
+# number of bytes that were vouched for read back through it. The name is resolved
+# once, so there is nothing to race and nothing here to retry. See that file for
+# what O_NOFOLLOW does and does not cover.
 #
-# Exit: 0 printed it. 1 there is no cache yet. 2 refused it. Anything else failed.
+# Exit: 0 printed it. 1 there is no cache yet. 2 refused it. 3 could not read it.
 
 set -uo pipefail
 
-# Opening a FIFO blocks inside open(2), before any check can run, so the whole
-# thing is timeboxed from the outside rather than guessed at from the inside.
-if [ "${OC_READ_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
-  export OC_READ_TIMEBOXED=1
-  exec timeout -k 1 15 "$0" "$@"
-fi
-
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PLUGIN_ID="oliwier.opencode-configs"
 FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$PLUGIN_ID/models.json"
 
@@ -26,62 +20,8 @@ FILE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$PLUGIN_ID/models.json"
 # with. It counts bytes on the wire — a QString of them costs the shell more.
 MAX_BYTES=12582912
 
-# 0 printed it, 1 not there, 2 refused, 3 the name moved while we looked at it.
-emit() {
-  local meta size dev ino type rc
-
-  # The one and only open. Its own error message would be noise on a first run.
-  { exec 3< "$FILE"; } 2>/dev/null || return 1
-
-  # /dev/fd/3 is the descriptor, not the name it was opened under, so this is the
-  # type and length of what will actually be read. Split on a delimiter rather than
-  # on spaces: `%F` is "regular file", two words, and would shift every field.
-  meta="$(stat -L -c '%s|%d|%i|%F' /dev/fd/3 2>/dev/null)" || { exec 3<&-; return 2; }
-  IFS='|' read -r size dev ino type <<<"$meta"
-
-  case "$type" in
-    "regular file") ;;
-    "regular empty file")
-      # Never a valid catalog — an interrupted or out-of-space write. Refusing
-      # rather than printing nothing is what gets one rebuilt.
-      exec 3<&-; printf 'the model cache is empty; rebuilding it\n' >&2; return 2 ;;
-    *)
-      exec 3<&-
-      printf 'the model cache is a %s, not a file; ignoring it\n' "${type:-unreadable thing}" >&2
-      return 2 ;;
-  esac
-
-  case "$size" in
-    ''|*[!0-9]*) exec 3<&-; return 2 ;;
-  esac
-  if [ "$size" -gt "$MAX_BYTES" ]; then
-    exec 3<&-
-    printf 'the model cache is %s bytes; refusing to load it\n' "$size" >&2
-    return 2
-  fi
-
-  # lstat, no -L: a symlink's own inode is never its target's, so a mismatch means
-  # the name led somewhere else, or leads somewhere else now. Its own code, because
-  # bin/sync-models.sh publishes by renaming and that looks identical from here.
-  if [ "$dev:$ino" != "$(stat -c '%d:%i' "$FILE" 2>/dev/null)" ]; then
-    exec 3<&-; return 3
-  fi
-
-  # Exactly the length that was vouched for, so a file being appended to yields the
-  # document that was measured rather than a truncated prefix of a longer one.
-  head -c "$size" <&3
-  rc=$?
-  exec 3<&-
-  return "$rc"
-}
-
-emit
-rc=$?
-# One retry, which is what tells a rename by sync-models.sh apart from a swap: a
-# writer renames once and is then done, and nothing planted survives being refused.
-if [ "$rc" = 3 ]; then
-  emit
-  rc=$?
-  [ "$rc" = 3 ] && { printf 'the model cache kept changing underneath the read\n' >&2; rc=2; }
-fi
-exit "$rc"
+# --no-empty because a zero-length cache is an interrupted or out-of-space write,
+# never a catalogue; refusing is what gets one rebuilt. No --follow: this is the
+# plugin's own file, at a path anything running as this user can predict.
+exec "$SELF_DIR/safe-read" "$FILE" \
+  --max-bytes "$MAX_BYTES" --no-empty --label "the model cache"
