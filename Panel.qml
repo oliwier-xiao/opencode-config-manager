@@ -38,13 +38,20 @@ Panel {
   readonly property bool showModelMeta: setting("showModelMeta", true) !== false
   readonly property string configDir: String(setting("configDir", ""))
 
-  // Byte ceilings. Everything read into this shell is bounded before it is
-  // parsed: the catalog is regenerated from the network, and a process can
-  // always be made to print more than anyone expected.
+  // Byte ceilings, enforced at the far end of every pipe rather than here — a
+  // process can always be made to print more than anyone expected, and the read
+  // is the allocation. These count bytes on the wire; a QString of them costs
+  // the shell rather more. Kept so both ends of each pipe have to agree.
   readonly property int maxCatalogBytes: 12 * 1024 * 1024
   readonly property int maxOutputBytes: 4 * 1024 * 1024
 
-  readonly property string pluginDir: String(Qt.resolvedUrl(".")).replace(/^file:\/\//, "").replace(/\/$/, "")
+  // Qt.resolvedUrl percent-encodes: a home directory with a space in it would
+  // otherwise reach Process as a literal %20, and nothing would start.
+  function fromFileUrl(u) {
+    var s = String(u || "").replace(/^file:\/\//, "").replace(/\/$/, "")
+    try { return decodeURIComponent(s) } catch (e) { return s }
+  }
+  readonly property string pluginDir: root.fromFileUrl(Qt.resolvedUrl("."))
   readonly property var actionEnv: ({
     "OC_MANAGE_OHMY": root.manageOhMyOpenAgent ? "1" : "0",
     "OC_MANAGE_OPENCODE": root.manageOpencodeJson ? "1" : "0",
@@ -59,6 +66,7 @@ Panel {
   property var detected: null
   property var catalog: Catalog.empty()
   property var catalogIndex: ({})
+  property bool catalogSyncTried: false
   property bool busy: false
   property bool loaded: false
 
@@ -160,7 +168,7 @@ Panel {
     // An explicit refresh means "I just added a provider", so it goes past the
     // TTL rather than being told the cache is still young.
     catalogSync.force = true
-    catalogFile.syncTried = false
+    root.catalogSyncTried = false
     if (!catalogSync.running) catalogSync.running = true
     reload()
   }
@@ -885,67 +893,48 @@ Panel {
     onLoadFailed: root.templates = []
   }
 
-  // The size is checked in a subprocess before FileView is ever pointed at the
-  // file. Refusing after text() has already returned is too late: the read
-  // itself is the allocation, and omarchy-shell is shared by every plugin.
+  // The panel never opens the cache and is not given its path. bin/read-catalog
+  // decides on the descriptor it is about to read — a name checked and then opened
+  // is a name that can be replaced in between — and prints at most maxCatalogBytes,
+  // so a symlink, a FIFO or a bigger file never reaches this process at all.
+  // omarchy-shell is one process for every plugin on the desktop; the read is the
+  // allocation, and refusing after text() has returned would be too late.
   Process {
-    id: catalogProbe
-    property string target: ""
-    command: ["stat", "-c", "%s", catalogProbe.target]
+    id: catalogRead
+    command: [root.pluginDir + "/bin/read-catalog"]
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
-        var n = parseInt(String(text || "").trim(), 10)
-        if (!isFinite(n) || n <= 0) return
-        if (n > root.maxCatalogBytes) {
-          console.warn("opencode-configs: model list is", n, "bytes; refusing to load it")
-          return
-        }
-        catalogFile.path = catalogProbe.target
-        catalogFile.reload()
+        var raw = String(text || "")
+        // Already bounded by the reader; kept so the two ceilings must agree.
+        if (raw === "" || !Model.withinLimit(raw, root.maxCatalogBytes)) return
+        var c = Catalog.fromText(raw)
+        // A truncated or unparseable cache leaves the picker on what it already
+        // has, which is more useful than an empty list.
+        if (!c || !c.models || c.models.length === 0) return
+        root.catalog = c
+        root.catalogIndex = Catalog.byId(c)
       }
+    }
+    stderr: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var t = String(text || "").trim()
+        if (t !== "") console.warn("opencode-configs:", t.substring(0, 500))
+      }
+    }
+    onExited: function (code) {
+      // Nothing to read, or something that was refused: build one, once. Retrying on
+      // every failure turns an offline first run into an unbounded spawn loop.
+      if (code === 0 || root.catalogSyncTried) return
+      root.catalogSyncTried = true
+      if (!catalogSync.running) catalogSync.running = true
     }
   }
 
   function loadCatalog() {
-    if (catalogProbe.running) return
-    catalogProbe.target = root.catalogPath
-    catalogProbe.running = true
-  }
-
-  readonly property string catalogPath:
-    (Quickshell.env("XDG_CACHE_HOME") || (Quickshell.env("HOME") + "/.cache"))
-    + "/omarchy/oliwier.opencode-configs/models.json"
-
-  FileView {
-    id: catalogFile
-    // Honour XDG_CACHE_HOME exactly as bin/sync-models.sh does; disagreeing
-    // with it meant the panel never found the file the script had just written.
-    property bool syncTried: false
-    // Set by loadCatalog() only after the size probe passes.
-    path: ""
-    watchChanges: true
-    printErrors: false
-    onLoaded: {
-      var raw = text()
-      // Refuse rather than parse. The picker stays usable on the bundled list,
-      // and a model id typed by hand is as valid as one picked from a list.
-      if (!Model.withinLimit(raw, root.maxCatalogBytes)) {
-        console.warn("opencode-configs: model list is larger than", root.maxCatalogBytes, "bytes; ignoring it")
-        return
-      }
-      var c = Catalog.fromText(raw)
-      root.catalog = c
-      root.catalogIndex = Catalog.byId(c)
-    }
-    onFileChanged: root.loadCatalog()
-    onLoadFailed: {
-      // Build one, once: retrying on every failure turns an offline first run into an
-      // unbounded spawn loop. An explicit refresh clears the latch.
-      if (catalogFile.syncTried) return
-      catalogFile.syncTried = true
-      if (!catalogSync.running) catalogSync.running = true
-    }
+    if (catalogRead.running) return
+    catalogRead.running = true
   }
 
   // On a timer, not on panel open: the three seconds `opencode models` costs must
