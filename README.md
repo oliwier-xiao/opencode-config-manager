@@ -1,4 +1,4 @@
-# OpenCode Configs
+# OpenCode Config Manager
 
 Saved opencode model profiles, one click from your Omarchy bar.
 
@@ -63,7 +63,7 @@ If you use opencode on its own, it manages the `model`, `small_model` and `agent
 have defined in that file's `agent` key: add one and it appears here on the next panel open, with
 no configuration.
 
-![Profiles, plain opencode](docs/plain-profiles.png)
+![Profiles, plain opencode](preview.png)
 
 Every profile says how many entries it pins and to what. The dot on the left is what the profile
 costs to run — dim for free, brighter as it gets expensive, and opencode's own purple for the

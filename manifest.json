@@ -1,7 +1,7 @@
 {
   "schemaVersion": 1,
   "id": "oliwier.opencode-configs",
-  "name": "OpenCode Configs",
+  "name": "OpenCode Config Manager",
   "version": "1.0.0",
   "author": "oliwier-xiao",
   "license": "MIT",
@@ -15,7 +15,7 @@
     "barWidget": "BarWidget.qml"
   },
   "barWidget": {
-    "displayName": "OpenCode Configs",
+    "displayName": "OpenCode Config Manager",
     "description": "Switch between saved opencode model profiles and edit which model each agent uses.",
     "category": "AI",
     "aliases": [
