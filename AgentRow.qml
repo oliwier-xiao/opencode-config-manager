@@ -27,9 +27,10 @@ Item {
   // the foreground, and on an all-black-text theme all three levels collapse into one.
   readonly property color muted: Util.alpha(foreground, 0.66)
   readonly property color veryMuted: Util.alpha(foreground, 0.45)
-  // Effort only on oh-my-openagent rows: opencode.json wants a bare model string there
-  // and refuses to start when it finds an object, so the control is absent, not ignored.
-  readonly property var variants: (row && row.file === "ohmy")
+  // Effort on every agent and category row. opencode's own AgentConfig carries a
+  // `variant` just as oh-my-openagent's entries do; only the two bare opencode
+  // defaults, `model` and `small_model`, are plain strings with nowhere to put one.
+  readonly property var variants: (row && row.group !== "default")
     ? Catalog.variantsFor(root.catalogIndex, row.model) : []
   readonly property bool pickerOpen: picker.popupOpen || variantPicker.popupOpen
 

@@ -121,7 +121,7 @@ Panel {
   readonly property string activeTier: activeProfile
     ? Palette.profileTier(Model.rowsFor(activeProfile), root.catalogIndex) : "unknown"
 
-  readonly property bool configBroken: errorCode === "E_PARSE" || errorCode === "E_JSONC"
+  readonly property bool configBroken: errorCode === "E_PARSE"
   readonly property bool hasOpencode: !detected || detected.ok !== false
 
   readonly property string tooltipText: {
@@ -243,14 +243,25 @@ Panel {
       note: String(tpl.description || ""),
       targets: []
     }
-    if (root.manageOhMyOpenAgent && root.detected && root.detected.shape === "oh-my-openagent"
-        && tpl.ohmy) {
+    var underOhMy = root.detected && root.detected.shape === "oh-my-openagent"
+    if (root.manageOhMyOpenAgent && underOhMy && tpl.ohmy) {
       profile.targets.push({ file: "ohmy", shape: "oh-my-openagent",
                              manages: Object.keys(tpl.ohmy), payload: tpl.ohmy })
     }
     if (root.manageOpencodeJson && tpl.opencode) {
-      profile.targets.push({ file: "opencode", shape: "opencode",
-                             manages: Object.keys(tpl.opencode), payload: tpl.opencode })
+      // Under oh-my-openagent its agents supersede opencode's, so a template only
+      // carries the two base keys across; taking its `agent` block as well would
+      // write rows this panel no longer draws, and drop any subagent of yours.
+      var oc = tpl.opencode
+      if (underOhMy) {
+        oc = {}
+        if (tpl.opencode.model) oc.model = tpl.opencode.model
+        if (tpl.opencode.small_model) oc.small_model = tpl.opencode.small_model
+      }
+      if (Object.keys(oc).length > 0) {
+        profile.targets.push({ file: "opencode", shape: "opencode",
+                               manages: Object.keys(oc), payload: oc })
+      }
     }
     if (profile.targets.length === 0) return
 
@@ -643,6 +654,8 @@ Panel {
         authedProviders: root.detected ? (root.detected.authedProviders || []) : []
         catalogIndex: root.catalogIndex
         shape: root.detected ? String(root.detected.shape || "") : ""
+        manageOhMy: root.manageOhMyOpenAgent
+        manageOpencode: root.manageOpencodeJson
         busy: root.busy
         cursorActive: root.cursorActive
         selectedIndex: root.selectedIndex
@@ -787,21 +800,22 @@ Panel {
         var parsed = Model.parseJson(text, null)
         if (!parsed) return
         root.detected = parsed
+        // Detect reads the rosters off the installed software and says which of
+        // the two shapes is actually running. Both have to reach Model before
+        // anything draws, or the first paint is of the wrong panel.
+        Model.setRoster(parsed.roster)
+        Model.setShape(String(parsed.shape || "opencode"))
         // A config that will not parse is the one state where nothing else in
         // the panel means anything, so it outranks every other message.
         var warnings = parsed.warnings || []
         for (var i = 0; i < warnings.length; i++) {
           var w = warnings[i]
-          if (w.code === "E_PARSE" || w.code === "E_JSONC") {
-            root.setError(w.code,
-              w.code === "E_JSONC"
-                ? root.basename(w.file) + " has comments in it, and this cannot edit it safely."
-                : root.basename(w.file) + " will not parse. Nothing was changed.",
-              w.file)
+          if (w.code === "E_PARSE") {
+            root.setError(w.code, root.basename(w.file) + " will not parse. Nothing was changed.", w.file)
             return
           }
         }
-        if (root.errorCode === "E_PARSE" || root.errorCode === "E_JSONC") root.clearError()
+        if (root.errorCode === "E_PARSE") root.clearError()
 
         // A `model` or `agent` key in ~/.opencode/opencode.json is loaded last and beats
         // everything this panel writes — unsaid, a switch looks like it did nothing.

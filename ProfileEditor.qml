@@ -99,9 +99,13 @@ Item {
     if (!root.profile) return
     var index = root.catalogIndex
     root.profileEdited(Model.setAllModels(root.profile, modelId, function (id, row) {
-      // Keep the row's effort, stepped down to one this model offers. Only
-      // oh-my-openagent has a variant field; opencode.json takes a bare string.
-      return row.file === "ohmy" ? Catalog.nearestVariant(index, id, row.variant || "high") : ""
+      // Keep the row's effort, stepped down to one this model offers. Both shapes
+      // have a variant field — opencode's AgentConfig included — but the two
+      // opencode defaults are bare model strings and take none. A row the user
+      // never set gets no effort invented for it either.
+      if (row.group === "default") return ""
+      if (!row.variant) return ""
+      return Catalog.nearestVariant(index, id, row.variant)
     }))
   }
 
@@ -257,8 +261,12 @@ Item {
     // clipping ListView would cut it off at the row edge.
     property bool anyPickerOpen: false
 
-    function headingFor(group) {
-      return group === "agent" ? "AGENTS" : (group === "category" ? "CATEGORIES" : "DEFAULTS")
+    // Model names its own sections: under oh-my-openagent the two opencode keys
+    // are the bottom of a fallback chain, not the defaults, and they say so.
+    function headingFor(row) {
+      if (row && row.heading) return row.heading
+      return row && row.group === "agent" ? "AGENTS"
+           : (row && row.group === "category" ? "CATEGORIES" : "DEFAULTS")
     }
 
     delegate: Column {
@@ -268,7 +276,7 @@ Item {
       spacing: 0
 
       readonly property bool startsGroup:
-        index === 0 || root.rows[index - 1].group !== modelData.group
+        index === 0 || agentList.headingFor(root.rows[index - 1]) !== agentList.headingFor(modelData)
 
       Item {
         width: parent.width
@@ -282,7 +290,7 @@ Item {
           anchors.bottomMargin: Style.spacing.xs
           foreground: root.foreground
           fontFamily: root.fontFamily
-          text: agentList.headingFor(modelData.group)
+          text: agentList.headingFor(modelData)
         }
       }
 

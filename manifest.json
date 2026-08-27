@@ -2,7 +2,7 @@
   "schemaVersion": 1,
   "id": "oliwier.opencode-configs",
   "name": "OpenCode Config Manager",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "author": "oliwier-xiao",
   "license": "MIT",
   "description": "Saved opencode model profiles in the bar. Switch which model every agent runs on with one click, and edit any profile from a searchable list of every model your opencode can reach.",

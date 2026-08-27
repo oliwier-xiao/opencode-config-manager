@@ -1,0 +1,335 @@
+#!/usr/bin/env python3
+"""Read and surgically edit a JSONC config, keeping every byte this tool does not own.
+
+oh-my-openagent's user config is ~/.omo/omo.jsonc — JSONC, with comments, and with
+the opencode-specific half nested under an "[opencode]" key. jq cannot read comments
+and a reserialise would drop them, so the edit has to be a splice: locate the span a
+key's value occupies and replace only that span. Everything else in the file, down to
+the whitespace, comes out the far side unchanged.
+
+  jsonc-edit read  <file> [--scope KEY ...]
+  jsonc-edit apply <file> --payload <json> --manages <json> [--scope KEY ...]
+
+`read` prints the scoped object as compact JSON. `apply` prints the whole new file on
+stdout; the caller decides how it lands on disk.
+"""
+import json
+import sys
+
+WS = " \t\r\n"
+
+
+class Bad(Exception):
+    pass
+
+
+class Scanner:
+    """A JSONC reader that records where every value starts and ends."""
+
+    def __init__(self, text):
+        self.s = text
+        self.i = 0
+
+    def skip(self):
+        s, n = self.s, len(self.s)
+        while self.i < n:
+            c = s[self.i]
+            if c in WS:
+                self.i += 1
+            elif c == "/" and self.i + 1 < n and s[self.i + 1] == "/":
+                while self.i < n and s[self.i] != "\n":
+                    self.i += 1
+            elif c == "/" and self.i + 1 < n and s[self.i + 1] == "*":
+                self.i += 2
+                while self.i < n and not (s[self.i] == "*" and self.i + 1 < n and s[self.i + 1] == "/"):
+                    self.i += 1
+                self.i += 2
+            else:
+                return
+
+    def string(self):
+        s = self.s
+        if s[self.i] != '"':
+            raise Bad("expected a string at %d" % self.i)
+        start = self.i
+        self.i += 1
+        while self.i < len(s):
+            c = s[self.i]
+            if c == "\\":
+                self.i += 2
+                continue
+            self.i += 1
+            if c == '"':
+                return json.loads(s[start:self.i]), start, self.i
+        raise Bad("unterminated string at %d" % start)
+
+    def value(self):
+        """Return (python value, node). node carries the span and, for objects, members."""
+        self.skip()
+        if self.i >= len(self.s):
+            raise Bad("unexpected end of file")
+        c = self.s[self.i]
+        if c == "{":
+            return self.obj()
+        if c == "[":
+            return self.arr()
+        if c == '"':
+            v, a, b = self.string()
+            return v, {"kind": "value", "start": a, "end": b}
+        start = self.i
+        while self.i < len(self.s) and self.s[self.i] not in ",}]" + WS and not (
+            self.s[self.i] == "/" and self.i + 1 < len(self.s) and self.s[self.i + 1] in "/*"
+        ):
+            self.i += 1
+        raw = self.s[start:self.i]
+        try:
+            v = json.loads(raw)
+        except Exception:
+            raise Bad("cannot read %r at %d" % (raw, start))
+        return v, {"kind": "value", "start": start, "end": self.i}
+
+    def obj(self):
+        start = self.i
+        self.i += 1  # {
+        out, members = {}, []
+        while True:
+            self.skip()
+            if self.i >= len(self.s):
+                raise Bad("unterminated object at %d" % start)
+            if self.s[self.i] == "}":
+                self.i += 1
+                break
+            member_start = self.i
+            key, _, _ = self.string()
+            self.skip()
+            if self.i >= len(self.s) or self.s[self.i] != ":":
+                raise Bad("expected ':' at %d" % self.i)
+            self.i += 1
+            val, node = self.value()
+            member_end = self.i
+            out[key] = val
+            members.append({"key": key, "start": member_start, "end": member_end, "value": node})
+            self.skip()
+            if self.i < len(self.s) and self.s[self.i] == ",":
+                self.i += 1
+        return out, {"kind": "object", "start": start, "end": self.i, "members": members}
+
+    def arr(self):
+        start = self.i
+        self.i += 1  # [
+        out = []
+        while True:
+            self.skip()
+            if self.i >= len(self.s):
+                raise Bad("unterminated array at %d" % start)
+            if self.s[self.i] == "]":
+                self.i += 1
+                break
+            val, _ = self.value()
+            out.append(val)
+            self.skip()
+            if self.i < len(self.s) and self.s[self.i] == ",":
+                self.i += 1
+        return out, {"kind": "array", "start": start, "end": self.i, "members": []}
+
+
+def parse(text):
+    sc = Scanner(text)
+    val, node = sc.value()
+    sc.skip()
+    if sc.i != len(text):
+        raise Bad("trailing content at %d" % sc.i)
+    return val, node
+
+
+def detect_indent(text):
+    for line in text.splitlines():
+        stripped = line.lstrip(" \t")
+        if stripped and stripped != line and stripped[0] == '"':
+            lead = line[: len(line) - len(stripped)]
+            return "\t" if lead.startswith("\t") else " " * len(lead)
+    return "  "
+
+
+def line_indent(text, offset):
+    start = text.rfind("\n", 0, offset) + 1
+    lead = ""
+    for c in text[start:offset]:
+        if c in " \t":
+            lead += c
+        else:
+            break
+    return lead
+
+
+def render(value, base, unit):
+    body = json.dumps(value, indent=len(unit) if unit != "\t" else 1, ensure_ascii=False)
+    if unit == "\t":
+        body = "\n".join(
+            (l.replace(" ", "\t", len(l) - len(l.lstrip(" "))) if l.startswith(" ") else l)
+            for l in body.splitlines()
+        )
+    lines = body.splitlines()
+    return ("\n" + base).join(lines)
+
+
+def splice(text, node, updates, unit):
+    """Apply {key: value|DELETE} to one object node. Returns the new text.
+
+    Edits run back to front so an earlier offset is never invalidated by a later one.
+    """
+    members = {m["key"]: m for m in node["members"]}
+    edits = []          # (start, end, replacement)
+    additions = []
+
+    for key, val in updates.items():
+        m = members.get(key)
+        if val is DELETE:
+            if not m:
+                continue
+            start, end = m["start"], m["end"]
+            # Swallow the separator so the object does not end up with a hole.
+            after = end
+            while after < len(text) and text[after] in WS:
+                after += 1
+            if after < len(text) and text[after] == ",":
+                end = after + 1
+            else:
+                before = start
+                while before > 0 and text[before - 1] in WS:
+                    before -= 1
+                if before > 0 and text[before - 1] == ",":
+                    start = before - 1
+            # Take the blank line the member used to occupy with it.
+            ls = text.rfind("\n", 0, start) + 1
+            if text[ls:start].strip() == "":
+                start = ls
+                if end < len(text) and text[end] == "\n":
+                    end += 1
+            edits.append((start, end, ""))
+        else:
+            if m:
+                base = line_indent(text, m["start"])
+                edits.append((m["value"]["start"], m["value"]["end"], render(val, base, unit)))
+            else:
+                additions.append((key, val))
+
+    if additions:
+        close = node["end"] - 1  # the '}'
+        base = line_indent(text, node["members"][0]["start"]) if node["members"] else line_indent(text, node["start"]) + unit
+        chunks = []
+        for key, val in additions:
+            chunks.append("%s%s: %s" % (base, json.dumps(key, ensure_ascii=False), render(val, base, unit)))
+        body = ",\n".join(chunks)
+        cut = close
+        while cut > 0 and text[cut - 1] in WS:
+            cut -= 1
+        lead = ",\n" if node["members"] else "\n"
+        tail = "\n" + line_indent(text, node["start"])
+        if node["members"] and text[cut - 1] == ",":
+            lead = "\n"
+        edits.append((cut, close, lead + body + tail))
+
+    for start, end, rep in sorted(edits, key=lambda e: -e[0]):
+        text = text[:start] + rep + text[end:]
+    return text
+
+
+class _Delete:
+    def __repr__(self):
+        return "<delete>"
+
+
+DELETE = _Delete()
+
+
+def descend(value, scope):
+    for key in scope:
+        if not isinstance(value, dict) or key not in value:
+            return None
+        value = value[key]
+    return value if isinstance(value, dict) else None
+
+
+def main(argv):
+    if len(argv) < 3:
+        sys.stderr.write(__doc__)
+        return 1
+    mode, path = argv[1], argv[2]
+    scope, payload, manages = [], None, None
+    i = 3
+    while i < len(argv):
+        a = argv[i]
+        if a == "--scope":
+            scope.append(argv[i + 1]); i += 2
+        elif a == "--payload":
+            payload = json.loads(argv[i + 1]); i += 2
+        elif a == "--manages":
+            manages = json.loads(argv[i + 1]); i += 2
+        else:
+            sys.stderr.write("jsonc-edit: unknown option %s\n" % a)
+            return 1
+
+    try:
+        with open(path, encoding="utf-8") as fh:
+            text = fh.read()
+    except OSError as exc:
+        sys.stderr.write("jsonc-edit: %s\n" % exc)
+        return 1
+
+    try:
+        doc, root = parse(text)
+    except Bad as exc:
+        sys.stderr.write("jsonc-edit: %s: %s\n" % (path, exc))
+        return 1
+    if not isinstance(doc, dict):
+        sys.stderr.write("jsonc-edit: %s is not a JSON object\n" % path)
+        return 1
+
+    if mode == "read":
+        sys.stdout.write(json.dumps(descend(doc, scope) or {}, ensure_ascii=False))
+        return 0
+
+    if mode != "apply":
+        sys.stderr.write("jsonc-edit: unknown mode %s\n" % mode)
+        return 1
+    if payload is None or manages is None:
+        sys.stderr.write("jsonc-edit: apply needs --payload and --manages\n")
+        return 1
+
+    updates = {k: (payload[k] if k in payload else DELETE) for k in manages}
+    if not updates:
+        sys.stdout.write(text)
+        return 0
+
+    unit = detect_indent(text)
+
+    if scope:
+        # The scope object may not exist yet. Building it in one assignment keeps
+        # the splice to a single key at the level above.
+        node, container = root, doc
+        for depth, key in enumerate(scope):
+            member = next((m for m in node["members"] if m["key"] == key), None)
+            if member is None or member["value"]["kind"] != "object":
+                fresh = descend(doc, scope[:depth]) or {}
+                nested = dict(container.get(key) or {}) if isinstance(container.get(key), dict) else {}
+                for k, v in updates.items():
+                    if v is DELETE:
+                        nested.pop(k, None)
+                    else:
+                        nested[k] = v
+                for k in scope[depth + 1:][::-1]:
+                    nested = {k: nested}
+                sys.stdout.write(splice(text, node, {key: nested}, unit))
+                return 0
+            node = member["value"]
+            container = container[key]
+        sys.stdout.write(splice(text, node, updates, unit))
+        return 0
+
+    sys.stdout.write(splice(text, root, updates, unit))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

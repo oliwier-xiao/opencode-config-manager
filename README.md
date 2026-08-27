@@ -8,9 +8,14 @@ and a running session re-reads its config where it stands — nothing closes, no
 
 ![The bar widget](docs/bar.png)
 
-Works with **classic opencode** and with **oh-my-openagent** — it reads your config rather than
-carrying a list of its own, so it shows whatever is actually in the file, including agents you
-added yourself. The pill in the top right of the panel says which of the two it found.
+Works with **classic opencode** and with **oh-my-openagent**, and it works out which one you are
+running rather than asking you. Under plain opencode it shows opencode's agents. Under
+oh-my-openagent it shows oh-my-openagent's — its agents supersede opencode's, so showing both
+would offer two rows for one decision. The pill in the top right of the panel says which it found.
+
+The list of agents is read off the software you have installed — opencode's own generated schema,
+and oh-my-openagent's own shipped schema — never from a list baked into this plugin. Agents you
+defined yourself are read straight out of your config and come first.
 
 ### What the mark is telling you
 
@@ -78,9 +83,10 @@ To add more, press **Add a profile**. It offers three ways in:
 ## Plain opencode
 
 If you use opencode on its own, it manages the `model`, `small_model` and `agent` keys of
-`~/.config/opencode/opencode.json`. That means opencode's own built-ins — `build`, `plan`,
-`general`, `explore` and `scout` — plus any agent you have defined in that file's `agent` key: add
-one and it appears here on the next panel open, with no configuration.
+`~/.config/opencode/opencode.json`. The agents are whichever ones your opencode names in its own
+config schema — `build`, `plan`, `general`, `explore` and the three it uses internally — plus any
+agent you have defined in that file's `agent` key: add one and it appears here on the next panel
+open, with no configuration.
 
 ![Profiles, plain opencode](docs/plain-profiles.png)
 
@@ -96,26 +102,41 @@ file would hide the rest behind nothing at all: you cannot pin an agent it never
 
 So the editor draws the whole roster. Your file's own entries come first, in the file's order, and
 the rest follow as empty rows waiting for a model. The count in the summary only ever counts the
-ones that actually pin something — `2 pinned` out of nineteen rows means two agents are held to a
-model by you and seventeen are running on whatever their default is today. An agent the roster has
-never heard of still shows up, because the file is read first and the roster only appends.
+ones that actually pin something — `2 of 6 pinned` means two of the rows are held to a model by
+you and four are running on whatever their default is today. An agent the roster has never heard
+of still shows up, because the file is read first and the roster only appends.
 
 Editing one gives you every agent in the file, with the model, the reasoning effort, and what each
 costs per million tokens:
 
 ![Editing a profile, plain opencode](docs/plain-editor.png)
 
-The effort column is disabled on these rows on purpose: `opencode.json` wants a plain model
-string, so there is nowhere to put an effort. It stays visible rather than vanishing, so the rows
-keep lining up.
+Effort works on agent rows in both shapes — opencode's own agent entries carry a `variant` just as
+oh-my-openagent's do. The two rows it is disabled on are **Default model** and **Small model**:
+those are bare model strings with nowhere to put one. The control stays visible rather than
+vanishing, so the rows keep lining up.
 
 ---
 
 ## With oh-my-openagent
 
-If you run the [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) plugin, it also
-manages `~/.config/opencode/oh-my-openagent.json` — every agent, every category, and the fallback
-chain behind each one. It detects which of the two you have; you do not configure it.
+If you run the [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent) plugin, it
+manages `~/.omo/omo.jsonc` instead — every agent, every category, and the fallback chain behind
+each one. That file is JSONC and it holds one section per harness, so this only ever reads and
+writes what is under `"[opencode]"`, and your comments come back untouched.
+
+`~/.config/opencode/oh-my-openagent.json` was the old location. oh-my-openagent's
+`2026-07-opencode-config-unification` migration moved it, and once that has run nothing reads the
+old file any more. If one is still lying around, the panel says so rather than editing it.
+
+Below the agents and categories sits a small **opencode base** section holding `model` and
+`small_model`. oh-my-openagent falls back to those when a category has no model of its own, so
+they are worth seeing — but opencode's `agent` entries are not shown, because oh-my-openagent
+supplies its own `build` and `plan` and they win.
+
+Which of the two you are running is worked out from the software, not from a leftover file: the
+plugin has to be in your `opencode.json` `plugin` list, or its package has to be installed. You
+can still force the plain view by turning `manageOhMyOpenAgent` off.
 
 ![Profiles, oh-my-openagent](docs/panel-profiles.png?v=2)
 
@@ -124,7 +145,7 @@ chain behind each one. It detects which of the two you have; you do not configur
 Fallbacks are collapsed to one line per agent, because a fallback is a thing you set once and then
 want to see is still there.
 
-An agent that only exists as a markdown file in `~/.config/opencode/agent/` works in opencode but
+An agent that only exists as a markdown file in `~/.config/opencode/agents/` works in opencode but
 does not appear here — opencode never writes those back into `opencode.json`, and this panel edits
 the file. To manage one, add `"<name>": { "model": "..." }` under the `agent` key using the
 markdown filename as the key. The prompt and permissions stay in the `.md`; only the model moves
@@ -134,9 +155,11 @@ into the JSON, and the two merge.
 
 ## Templates
 
-Seven ready-made profiles ship with the plugin. Each one sets a model on every agent, matched to
-what that agent actually does — the heavy thinking on a strong model, the file-scanning on a cheap
-fast one — so someone who has just connected a key does not have to pick twenty models by hand.
+Seven ready-made profiles ship with the plugin. Each one matches models to what an agent actually
+does — the heavy thinking on a strong model, the file-scanning on a cheap fast one — so someone
+who has just connected a key does not have to pick every model by hand. Under oh-my-openagent a
+template fills eleven agents and eight categories; on plain opencode it sets the default model and
+two agents. Each row says which.
 
 | | |
 |---|---|
@@ -145,14 +168,16 @@ fast one — so someone who has just connected a key does not have to pick twent
 | **GPT API** | the GPT-5 line, codex on the building agent |
 | **Daily work** | a strong brain with cheap models doing the bulk, across providers |
 | **Budget** | as cheap as it gets while still being pleasant |
-| **Free** | costs nothing. Every agent gets two free fallbacks, because these are preview SKUs and previews get withdrawn |
+| **Free** | costs nothing. Under oh-my-openagent every agent gets two free fallbacks, because these are preview SKUs and previews get withdrawn |
 | **oh-my-openagent recommended** | the line-up its author publishes on [omo.dev](https://omo.dev/), model for model |
 
 ![Templates](docs/templates.png)
 
 Every template carries a half for each config shape, and only the half that matches your machine is
-ever written — so on plain opencode the oh-my-openagent half is left alone, and no
-`oh-my-openagent.json` is created. Each row says what it will actually set here:
+ever written — so on plain opencode the oh-my-openagent half is left alone, and no omo config file
+is created. Under oh-my-openagent the reverse applies: only the base model crosses over from the
+opencode half, because its agents supersede opencode's. Each row says what it will actually set
+here:
 
 ![Templates on plain opencode](docs/plain-templates.png)
 
@@ -189,8 +214,9 @@ else gets a neutral mark — the provider is written into every model id anyway.
 
 A switch rewrites only the keys a profile claims. Everything else in the file comes back with the
 same keys, in the same order, with the same values — your providers, your MCP servers, your plugin
-list, your API keys, your agent prompts. The file is re-serialised, so indentation is normalised;
-values and ordering are not touched.
+list, your API keys, your agent prompts. The edit is a splice into the text rather than a
+re-serialisation, so comments, indentation and blank lines survive it as well; a `.jsonc` is
+edited like any other file.
 
 Before every switch it copies the files it is about to touch. **Restore the previous config** in the
 footer puts them back exactly as they were, and the undo is itself undoable.
@@ -222,6 +248,21 @@ The default is **Notify**, which writes the files and tells you which sessions h
 | **Restart opencode** | write the files and ask every running TUI to re-read them, in place |
 | **Nothing** | write the files and say nothing |
 
+## Working on it
+
+```bash
+./test/run.sh
+```
+
+67 checks over the row model, the JSONC editor, shape detection and the write path.
+Every one of them runs against a temporary config directory, and the runner fails if any
+suite touched the config you actually use. The oh-my-openagent halves skip themselves on
+a machine that does not have it installed.
+
+`./dev-sync.sh` copies the working tree into `~/.config/omarchy/plugins/` and restarts the
+shell — a bar widget already mounted in a slot keeps its old instance otherwise, so a
+change lands in the registry and not on the screen.
+
 ## Settings
 
 Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy/shell.json`.
@@ -232,7 +273,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | `afterSwitch` | Notify | see **Reloading opencode** above |
 | `confirmSwitch` | off | ask before switching. Off is the fast path the bar is for |
 | `manageOpencodeJson` | on | manage `model`, `small_model` and `agent` in `opencode.json` |
-| `manageOhMyOpenAgent` | on | manage `agents`, `categories` and `fallback_models` in `oh-my-openagent.json` |
+| `manageOhMyOpenAgent` | on | manage `agents`, `categories` and `fallback_models` in `~/.omo/omo.jsonc`. Off forces the plain-opencode view |
 | `keepBackups` | 10 | copies kept of each config file, oldest deleted past this. The one Undo needs is never pruned |
 | `catalogRefreshHours` | 24 | how often the model list is rebuilt |
 | `showModelMeta` | on | show context window and price on every model row |

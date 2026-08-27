@@ -14,7 +14,7 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
-VERSION="1.0.1"
+VERSION="1.1.0"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -23,6 +23,14 @@ CACHE="$CACHE_HOME/omarchy/$PLUGIN_ID"
 
 CFG_DIR="${OPENCODE_CONFIG_DIR:-${XDG_CONFIG_HOME:-$HOME/.config}/opencode}"
 DEFAULT_CFG_DIR="${XDG_CONFIG_HOME:-$HOME/.config}/opencode"
+
+# oh-my-openagent 4.x keeps its user config outside the opencode config dir, in
+# ~/.omo, and shares one file across harnesses. OMO_CONFIG_HOME is here so a test
+# can point the whole omo half somewhere disposable.
+OMO_DIR="${OMO_CONFIG_HOME:-$HOME/.omo}"
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+JSONC="$SELF_DIR/jsonc-edit"
 
 # A profile only makes sense for the config it was captured from, so a non-default
 # CFG_DIR gets its own store; the default folder keeps the plain path it always had.
@@ -95,6 +103,15 @@ fingerprint() {
         "$file" 2>/dev/null | sha256sum 2>/dev/null | cut -c1-16)
   [ -n "$fp" ] || fp="unreadable"
   printf 'sha256:%s' "$fp"
+}
+
+# fingerprint() over whatever a logical target actually contributes, which for the
+# unified omo config is one key deep rather than the whole file.
+fingerprint_logical() {
+  local logical="$1" doc
+  doc="$(read_projected "$logical")"
+  [ -n "$doc" ] && [ "$doc" != "null" ] || { printf 'sha256:absent'; return 0; }
+  payload_fingerprint "$doc" "$(keys_for "$logical")"
 }
 
 # fingerprint() over a profile's stored payload instead of a file. It must project
@@ -219,15 +236,120 @@ take_lock() {
 
 # ---------------------------------------------------------------- resolution
 
-# The first path that exists wins, matching the loader's own order. A .jsonc beats the
-# .json beside it, and jq cannot read comments — so finding one is cause to refuse.
+# The first path that exists wins, matching the loader's own order.
+#
+# oh-my-openagent 4.x resolves its user config to ~/.omo/omo.jsonc. The four names
+# under the opencode config dir are what its one-shot "2026-07-opencode-config-
+# unification" migration reads *from*: once that migration has run, writing to them
+# changes nothing anyone reads. They stay in the list so a machine that has not
+# upgraded yet is still editable, but they come second.
 resolve_ohmy() {
   local p
+  for p in "$OMO_DIR/omo.jsonc" "$OMO_DIR/omo.json"; do
+    [ -f "$p" ] && { printf '%s' "$p"; return; }
+  done
   for p in "$CFG_DIR/oh-my-openagent.jsonc" "$CFG_DIR/oh-my-openagent.json" \
            "$CFG_DIR/oh-my-opencode.jsonc"  "$CFG_DIR/oh-my-opencode.json"; do
     [ -f "$p" ] && { printf '%s' "$p"; return; }
   done
-  printf '%s' "$CFG_DIR/oh-my-openagent.json"
+  printf '%s' "$OMO_DIR/omo.jsonc"
+}
+
+# The unified config carries one harness per key, so the opencode half of it sits
+# under "[opencode]" rather than at the top level. The legacy per-harness files
+# have no wrapper. Everything downstream reads and writes through this projection,
+# which is why the rest of the script never has to know which shape it got.
+scope_for() {
+  case "$1" in
+    ohmy)
+      case "$(resolve_ohmy)" in
+        "$OMO_DIR"/*) printf '%s' '["[opencode]"]' ;;
+        *)            printf '%s' '[]' ;;
+      esac
+      ;;
+    *) printf '%s' '[]' ;;
+  esac
+}
+
+# Where opencode unpacks a plugin. Not $CACHE_HOME/opencode/node_modules — that
+# path has never existed on any install; every plugin gets its own directory named
+# after the spec it was requested by.
+omo_package_dir() {
+  local d
+  for d in "$CACHE_HOME"/opencode/packages/oh-my-openagent@*/node_modules/oh-my-openagent \
+           "$CACHE_HOME"/opencode/packages/oh-my-opencode@*/node_modules/oh-my-opencode; do
+    [ -f "$d/package.json" ] && { printf '%s' "$d"; return 0; }
+  done
+  return 0
+}
+
+# The rosters come off the installed software, never out of this file. opencode
+# names its agents in its own generated schema; oh-my-openagent ships a JSON Schema
+# naming its agents and carries the category names as an enum in its bundle. A
+# panel that guessed instead eventually offers somebody an agent that never existed
+# — and then writes it into their config.
+#
+# Both probes are slow enough to be worth caching, and the cache key is the two
+# versions, so an upgrade re-reads rather than serving yesterday's roster.
+roster_json() {
+  local pkg="$1" oc_version="$2" omo_version="$3"
+  local key cache_file oc_agents om_agents om_cats
+  key="$(printf '%s|%s' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
+  cache_file="$CACHE/roster-$key.json"
+  if [ -s "$cache_file" ]; then cat "$cache_file"; return 0; fi
+
+  oc_agents="$(command -v opencode >/dev/null 2>&1 \
+    && opencode generate 2>/dev/null \
+       | jq -c '[.components.schemas.Config.properties.agent.properties | keys[]]' 2>/dev/null)"
+  case "$oc_agents" in ''|null) oc_agents='[]' ;; esac
+
+  om_agents='[]'; om_cats='[]'
+  if [ -n "$pkg" ]; then
+    om_agents="$(jq -c '[.properties.agents.properties | keys[]]' \
+      "$pkg/dist/oh-my-opencode.schema.json" 2>/dev/null)"
+    case "$om_agents" in ''|null) om_agents='[]' ;; esac
+    om_cats="$(python3 - "$pkg/dist/index.js" <<'PYEOF'
+import json, re, sys
+try:
+    with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
+        blob = fh.read()
+except OSError:
+    print("[]"); raise SystemExit
+# The bundle is minified onto few lines, so this has to match across newlines.
+m = re.search(r"BuiltinCategoryNameSchema\s*=\s*[A-Za-z_$][\w$]*\.enum\(\s*\[(.*?)\]\s*\)", blob, re.S)
+print(json.dumps(re.findall(r'"([^"]+)"', m.group(1)) if m else []))
+PYEOF
+)"
+    case "$om_cats" in ''|null) om_cats='[]' ;; esac
+  fi
+
+  local out
+  out="$(jq -cn --argjson oca "$oc_agents" --argjson oma "$om_agents" --argjson omc "$om_cats" \
+    '{opencode:{agents:$oca}, ohmy:{agents:$oma, categories:$omc}}')"
+  mkdir -p "$CACHE" 2>/dev/null && printf '%s\n' "$out" > "$cache_file" 2>/dev/null || true
+  printf '%s' "$out"
+}
+
+# `jsonc-edit read`, with the scope keys spread onto the command line.
+read_projected() {
+  local logical="$1" file scope k
+  file="$(file_for "$logical")"
+  [ -f "$file" ] || { printf 'null'; return 0; }
+  scope="$(scope_for "$logical")"
+  local args=(read "$file")
+  while IFS= read -r k; do [ -n "$k" ] && args+=(--scope "$k"); done < <(printf '%s' "$scope" | jq -r '.[]?')
+  "$JSONC" "${args[@]}" 2>/dev/null || printf 'null'
+}
+
+# The write half of the same projection: prints the whole new file on stdout, with
+# every comment and every key this tool does not manage left exactly as it was.
+write_projected() {
+  local logical="$1" payload="$2" mkeys="$3" file scope k
+  file="$(file_for "$logical")"
+  scope="$(scope_for "$logical")"
+  local args=(apply "$file" --payload "$payload" --manages "$mkeys")
+  while IFS= read -r k; do [ -n "$k" ] && args+=(--scope "$k"); done < <(printf '%s' "$scope" | jq -r '.[]?')
+  "$JSONC" "${args[@]}"
 }
 
 resolve_opencode() {
@@ -260,6 +382,17 @@ managed() {
   esac
 }
 
+# Managed *and* actually present. A profile carrying an oh-my-openagent half is
+# still worth applying on a machine that only runs opencode — the half that has a
+# file lands, the other is reported as skipped. Refusing the whole switch over a
+# file the user does not have is how a profile becomes permanently un-appliable.
+applicable() {
+  local logical="$1"
+  managed "$logical" || return 1
+  if [ "$logical" = "ohmy" ] && [ ! -f "$(file_for "$logical")" ]; then return 1; fi
+  return 0
+}
+
 # jq reads these itself, from a path: passing a config as an --argjson value would put
 # every provider API key and the MCP bearer token on a command line readable in /proc.
 readable_json() {
@@ -276,9 +409,10 @@ cmd_detect() {
   ohmy="$(resolve_ohmy)"
   opencode="$(resolve_opencode)"
 
-  local oc_version omo_version
+  local oc_version omo_version omo_pkg
   oc_version="$(command -v opencode >/dev/null 2>&1 && opencode --version 2>/dev/null | tr -d '\r' || true)"
-  omo_version="$(jq -r '.version // ""' "$CACHE_HOME/opencode/node_modules/oh-my-openagent/package.json" 2>/dev/null || true)"
+  omo_pkg="$(omo_package_dir)"
+  omo_version="$([ -n "$omo_pkg" ] && jq -r '.version // ""' "$omo_pkg/package.json" 2>/dev/null || true)"
 
   local authed
   authed="$(jq -c '[keys[]]' "$AUTH_FILE" 2>/dev/null || printf '[]')"
@@ -291,19 +425,64 @@ cmd_detect() {
   done
   pids="[$pid_list]"
 
-  # A project-level config shadows the user one, and editing the user file then
-  # has no visible effect. Worth a warning rather than a silent no-op.
-  local shadows='[]'
-  if [ -f "$PWD/.opencode/oh-my-openagent.json" ] || [ -f "$PWD/.opencode/oh-my-openagent.jsonc" ]; then
-    shadows="$(jq -cn --arg d "$PWD/.opencode" '[$d]')"
+  # A project-level config shadows the user one, and editing the user file then has
+  # no visible effect. Worth a warning rather than a silent no-op. oh-my-openagent
+  # walks cwd upwards looking for .omo, nearest wins; opencode does the same with
+  # .opencode. Both are worth reporting, and neither used to be found.
+  local shadows='[]' probe="$PWD"
+  while :; do
+    # $HOME is where the user layer lives, so a hit there is the config itself
+    # rather than something shadowing it. Only the directories below it count.
+    if [ "$probe" != "$HOME" ]; then
+      if [ -f "$probe/.omo/omo.jsonc" ] || [ -f "$probe/.omo/omo.json" ]; then
+        shadows="$(printf '%s' "$shadows" | jq -c --arg d "$probe/.omo" '. + [$d]')"
+      fi
+      if [ -f "$probe/.opencode/opencode.json" ] || [ -f "$probe/.opencode/opencode.jsonc" ]; then
+        shadows="$(printf '%s' "$shadows" | jq -c --arg d "$probe/.opencode" '. + [$d]')"
+      fi
+    fi
+    case "$probe" in "$HOME"|/|"") break ;; esac
+    probe="$(dirname "$probe")"
+  done
+
+  # Is oh-my-openagent actually in play? Three independent signals, because each
+  # one alone is wrong for somebody: the package can be installed and unused, the
+  # plugin can be declared before its config exists, and a config file can be left
+  # behind by an uninstall. A leftover file on its own is reported, not obeyed.
+  local opencode_doc omo_declared=false omo_installed=false omo_configured=false
+  opencode_doc="$(read_projected opencode)"
+  if printf '%s' "$opencode_doc" | jq -e '
+        [ (.plugin // [])[] | if type == "array" then .[0] else . end ]
+        | map(select(type == "string"))
+        | any(test("(^|/)oh-my-open(agent|code)($|@)"))' >/dev/null 2>&1; then
+    omo_declared=true
   fi
+  [ -n "$omo_pkg" ] && omo_installed=true
+  [ -f "$ohmy" ] && omo_configured=true
+
+  local omo_active=false
+  if [ "$omo_declared" = true ] || [ "$omo_installed" = true ]; then omo_active=true; fi
+
+  local roster; roster="$(roster_json "$omo_pkg" "$oc_version" "$omo_version")"
+
+  # The projections go to files rather than onto the command line: a config can
+  # hold provider keys and an MCP bearer token, and /proc makes an argv public.
+  local ohmy_doc_f opencode_doc_f
+  ohmy_doc_f="$(mktemp)"; read_projected ohmy > "$ohmy_doc_f"
+  opencode_doc_f="$(mktemp)"; printf '%s' "$opencode_doc" > "$opencode_doc_f"
 
   jq -n \
     --arg ohmyPath "$ohmy" \
+    --arg ohmyScope "$(scope_for ohmy)" \
     --arg opencodePath "$opencode" \
     --arg homePath "$HOME_CFG" \
-    --arg ohmyFp "$(fingerprint "$ohmy" "$OHMY_KEYS")" \
-    --arg opencodeFp "$(fingerprint "$opencode" "$OPENCODE_KEYS")" \
+    --arg ohmyFp "$(fingerprint_logical ohmy)" \
+    --arg opencodeFp "$(fingerprint_logical opencode)" \
+    --argjson roster "$roster" \
+    --argjson omoActive "$omo_active" \
+    --argjson omoDeclared "$omo_declared" \
+    --argjson omoInstalled "$omo_installed" \
+    --argjson omoConfigured "$omo_configured" \
     --arg ocVersion "$oc_version" \
     --arg omoVersion "$omo_version" \
     --argjson authed "$authed" \
@@ -312,12 +491,12 @@ cmd_detect() {
     --argjson ohmyExists "$([ -f "$ohmy" ] && echo true || echo false)" \
     --argjson opencodeExists "$([ -f "$opencode" ] && echo true || echo false)" \
     --argjson homeExists "$([ -f "$HOME_CFG" ] && echo true || echo false)" \
-    --argjson ohmyParses "$(jq -e . "$ohmy" >/dev/null 2>&1 && echo true || echo false)" \
+    --argjson ohmyParses "$([ -f "$ohmy" ] && [ "$(read_projected ohmy)" != "null" ] && echo true || echo false)" \
     --argjson opencodeParses "$(jq -e . "$opencode" >/dev/null 2>&1 && echo true || echo false)" \
     --argjson ohmyWritable "$([ -w "$ohmy" ] || [ ! -e "$ohmy" ] && [ -w "$(dirname "$ohmy")" ] && echo true || echo false)" \
     --argjson opencodeWritable "$([ -w "$opencode" ] || [ ! -e "$opencode" ] && [ -w "$(dirname "$opencode")" ] && echo true || echo false)" \
-    --slurpfile ohmyDocA "$(readable_json "$ohmy")" \
-    --slurpfile opencodeDocA "$(readable_json "$opencode")" \
+    --slurpfile ohmyDocA "$ohmy_doc_f" \
+    --slurpfile opencodeDocA "$opencode_doc_f" \
     --slurpfile homeDocA "$(readable_json "$HOME_CFG")" \
     '
     ( $ohmyDocA[0]     // null ) as $ohmyDoc     |
@@ -326,7 +505,19 @@ cmd_detect() {
     def fmt(p): if (p|endswith(".jsonc")) then "jsonc" else "json" end;
     {
       ok: true,
-      shape: (if ($ohmyExists and $ohmyDoc != null) then "oh-my-openagent" else "opencode" end),
+      # Which half of the panel is real. A config file left behind by an uninstall
+      # is not evidence the plugin runs, so the shape follows the software: an
+      # oh-my-openagent that opencode actually loads, or plain opencode.
+      shape: (if $omoActive then "oh-my-openagent" else "opencode" end),
+      ohMy: {
+        active: $omoActive,
+        declaredInOpencodeJson: $omoDeclared,
+        installed: $omoInstalled,
+        configured: $omoConfigured,
+        # A config nobody loads. Worth saying out loud rather than acting on.
+        stale: ($omoConfigured and ($omoActive | not))
+      },
+      roster: $roster,
       opencodeVersion: $ocVersion,
       ohMyVersion: $omoVersion,
       authedProviders: $authed,
@@ -334,6 +525,8 @@ cmd_detect() {
       files: {
         ohmy: {
           path: $ohmyPath, exists: $ohmyExists, format: fmt($ohmyPath),
+          # "" for a legacy per-harness file, "[opencode]" for the unified one.
+          scope: ($ohmyScope | fromjson | join(".")),
           parses: $ohmyParses, writable: $ohmyWritable, fingerprint: $ohmyFp,
           agents:     (($ohmyDoc.agents     // {}) | keys),
           categories: (($ohmyDoc.categories // {}) | keys),
@@ -360,12 +553,13 @@ cmd_detect() {
       warnings:
         ( (if $ohmyExists and ($ohmyParses|not) then [{code:"E_PARSE", file:$ohmyPath}] else [] end)
         + (if $opencodeExists and ($opencodeParses|not) then [{code:"E_PARSE", file:$opencodePath}] else [] end)
-        + (if ($ohmyPath|endswith(".jsonc")) then [{code:"E_JSONC", file:$ohmyPath}] else [] end)
-        + (if ($opencodePath|endswith(".jsonc")) then [{code:"E_JSONC", file:$opencodePath}] else [] end)
+        + (if ($omoConfigured and ($omoActive|not)) then [{code:"W_OHMY_STALE", file:$ohmyPath}] else [] end)
         + ($shadows | map({code:"W_SHADOWED", dir:.}))
         + (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent"))
              | map({code:"W_HOME_OVERRIDE", key:., file:$homePath})) )
     }' | head -c "$MAX_EMIT_BYTES"
+
+  rm -f "$ohmy_doc_f" "$opencode_doc_f"
 }
 
 # ---------------------------------------------------------------- validation
@@ -376,10 +570,10 @@ preflight() {
   local logical="$1" payload="$2" file="$3"
 
   [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
-  case "$file" in
-    *.jsonc) refuse "E_JSONC" "$(basename "$file") has comments in it. Nothing was changed." ;;
-  esac
-  jq -e . "$file" >/dev/null 2>&1 || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
+  # A .jsonc used to be refused outright because jq cannot read comments. The edit
+  # is a splice now, so comments survive it and the file is editable like any other.
+  [ "$(read_projected "$logical")" != "null" ] \
+    || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
   [ -w "$file" ] || refuse "E_PERM" "Cannot write $(basename "$file")."
 
   # Every model reference must look like provider/model. A typo here reaches
@@ -391,6 +585,17 @@ preflight() {
     | map(select(test("^[A-Za-z0-9~._-]+(/[^/[:space:]]+)+$") | not))
     | unique | .[]' 2>/dev/null | head -1)
   [ -z "$bad" ] || refuse "E_MODEL_SYNTAX" "\"$bad\" is not a provider/model id."
+
+  # opencode's AgentConfig is an object and its schema has no string branch, so a
+  # bare model string under `agent` is a config that will not load. The panel writes
+  # the long form; this is the gate that makes that a guarantee rather than a habit.
+  if [ "$logical" = "opencode" ]; then
+    local bare
+    bare=$(printf '%s' "$payload" | jq -r '
+      (.agent // {}) | to_entries | map(select(.value | type != "object")) | .[0].key // empty' 2>/dev/null)
+    [ -z "$bare" ] || refuse "E_AGENT_SHAPE" \
+      "\"$bare\" is set to a bare model string; opencode needs { \"model\": ... } there."
+  fi
 
   if [ "$logical" = "ohmy" ]; then
     local forbidden
@@ -407,11 +612,11 @@ preflight() {
 # a forward write does — the one path that used to skip every check.
 preflight_restore() {
   local dest="$1" src="$2"
-  case "$dest" in
-    *.jsonc) refuse "E_JSONC" "$(basename "$dest") has comments in it. Nothing was changed." ;;
-  esac
   if [ -e "$dest" ] && [ ! -w "$dest" ]; then refuse "E_PERM" "Cannot write $(basename "$dest")."; fi
-  jq -e . "$src" >/dev/null 2>&1 || refuse "E_PARSE" "That backup is not readable any more."
+  # A backup is a byte copy of whatever the file was, comments and all, so it is
+  # read back the same way the live file is.
+  "$JSONC" read "$src" >/dev/null 2>&1 \
+    || refuse "E_PARSE" "That backup is not readable any more."
 }
 
 # Deliberately not a pipeline stage: refuse() inside a pipeline exits only the
@@ -452,7 +657,7 @@ cmd_apply() {
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
-    if ! managed "$logical"; then skipped+=("$logical"); continue; fi
+    if ! applicable "$logical"; then skipped+=("$logical"); continue; fi
     payload=$(printf '%s' "$target" | jq -c '.payload // {}')
     file="$(file_for "$logical")"
     preflight "$logical" "$payload" "$file"
@@ -470,11 +675,11 @@ cmd_apply() {
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
-    managed "$logical" || continue
+    applicable "$logical" || continue
     file="$(file_for "$logical")"
     cp -pL "$file" "$dir/$logical.json" || refuse "E_PERM" "Cannot back up $(basename "$file")."
     backup_files=$(jq -cn --argjson acc "$backup_files" --arg l "$logical" --arg p "$file" \
-      --arg fp "$(fingerprint "$file" "$(keys_for "$logical")")" \
+      --arg fp "$(fingerprint_logical "$logical")" \
       '$acc + [{logical:$l, path:$p, fingerprint:$fp}]')
   done <<< "$targets"
 
@@ -489,7 +694,7 @@ cmd_apply() {
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
-    managed "$logical" || continue
+    applicable "$logical" || continue
     payload=$(printf '%s' "$target" | jq -c '.payload // {}')
     file="$(file_for "$logical")"
 
@@ -502,12 +707,10 @@ cmd_apply() {
     # Recorded before the write, not after: a write that fails part-way is
     # exactly the one the rollback has to cover.
     wrote+=("$logical")
-    if ! jq --argjson p "$payload" --argjson m "$mkeys" \
-        'reduce $m[] as $k (.; if ($p|has($k)) then .[$k] = $p[$k] else del(.[$k]) end)' \
-        "$file" | atomic_write "$file"; then
+    if ! write_projected "$logical" "$payload" "$mkeys" | atomic_write "$file"; then
       rc=1; break
     fi
-    if ! jq -e . "$file" >/dev/null 2>&1; then rc=1; break; fi
+    if [ "$(read_projected "$logical")" = "null" ]; then rc=1; break; fi
     applied+=("$logical")
   done <<< "$targets"
 
@@ -527,7 +730,7 @@ cmd_apply() {
   local new_targets='[]' l fp
   for l in "${applied[@]:-}"; do
     [ -n "$l" ] || continue
-    fp="$(fingerprint "$(file_for "$l")" "$(keys_for "$l")")"
+    fp="$(fingerprint_logical "$l")"
     new_targets=$(jq -cn --argjson acc "$new_targets" --arg l "$l" --arg fp "$fp" '$acc + [{file:$l, fingerprint:$fp}]')
   done
 
@@ -597,25 +800,61 @@ cmd_revert() {
     fi
   done <<< "$files"
 
-  local to_id
+  local to_id new_files='[]'
   to_id=$(jq -r '.state.activeProfileId // ""' "$PROFILES")
-  jq -n --arg ts "$stamp" --arg from "$to_id" --argjson files "$(jq -c '.files' "$dir/meta.json")" \
+  # Describe the state this backup actually holds, not the one it is undoing.
+  # Copying the old meta forward made a backup advertise someone else's digests.
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
+    logical=$(printf '%s' "$f" | jq -r '.logical')
+    [ -f "$new_dir/$logical.json" ] || continue
+    new_files=$(jq -cn --argjson acc "$new_files" --arg l "$logical" --arg p "$(file_for "$logical")" \
+      --arg fp "$(fingerprint_logical "$logical")" '$acc + [{logical:$l, path:$p, fingerprint:$fp}]')
+  done <<< "$files"
+  jq -n --arg ts "$stamp" --arg from "$to_id" --argjson files "$new_files" \
     '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:null, files:$files}' \
     > "$new_dir/meta.json"
 
-  local restored='[]'
+  # Gate every restore before performing any of them. Checking inside the write
+  # loop meant a refusal on the second file left the first one already rolled
+  # back, under an exit code that promises nothing was written.
+  local restorable='[]'
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     logical=$(printf '%s' "$f" | jq -r '.logical')
     # The path the backup came FROM, not whatever resolves today.
     path=$(printf '%s' "$f" | jq -r '.path // empty')
     [ -n "$path" ] || path="$(file_for "$logical")"
-    case "$path" in "$CFG_DIR"/*|"$HOME_CFG") ;; *) continue ;; esac
+    # Restores land only where this tool writes. $OMO_DIR is on the list because
+    # oh-my-openagent's config lives there — without it an undo silently skipped
+    # the whole oh-my-openagent half and still reported success.
+    case "$path" in "$CFG_DIR"/*|"$OMO_DIR"/*|"$HOME_CFG") ;; *) continue ;; esac
     [ -f "$dir/$logical.json" ] || continue
     preflight_restore "$path" "$dir/$logical.json"
-    cat "$dir/$logical.json" | atomic_write "$path" || refuse "E_WRITE" "Could not put $(basename "$path") back."
-    restored=$(jq -cn --argjson acc "$restored" --arg l "$logical" '$acc + [$l]')
+    restorable=$(jq -cn --argjson acc "$restorable" --arg l "$logical" --arg p "$path" \
+      '$acc + [{logical:$l, path:$p}]')
   done <<< "$files"
+
+  local restored='[]' put_back=() rrc=0
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    logical=$(printf '%s' "$entry" | jq -r '.logical')
+    path=$(printf '%s' "$entry" | jq -r '.path')
+    put_back+=("$logical")
+    if ! cat "$dir/$logical.json" | atomic_write "$path"; then rrc=1; break; fi
+    restored=$(jq -cn --argjson acc "$restored" --arg l "$logical" '$acc + [$l]')
+  done <<< "$(printf '%s' "$restorable" | jq -c '.[]')"
+
+  if [ "$rrc" -ne 0 ]; then
+    local l
+    for l in "${put_back[@]:-}"; do
+      [ -n "$l" ] || continue
+      [ -f "$new_dir/$l.json" ] && cp -p "$new_dir/$l.json" "$(file_for "$l")" 2>/dev/null || true
+    done
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The undo failed and the config was put back as it was.", backup:$backup}'
+    exit 3
+  fi
 
   local back_to
   back_to=$(jq -r '.fromProfileId // ""' "$dir/meta.json")
@@ -732,21 +971,27 @@ cmd_capture() {
 
   local targets='[]' logical file doc
   for logical in ohmy opencode; do
-    managed "$logical" || continue
+    applicable "$logical" || continue
     file="$(file_for "$logical")"
     [ -f "$file" ] || continue
-    jq -e . "$file" >/dev/null 2>&1 || continue
-    doc=$(jq -c --argjson m "$(keys_for "$logical")" \
-      '. as $in | reduce $m[] as $k ({}; if ($in|has($k)) then .[$k]=$in[$k] else . end)' "$file")
-    [ "$doc" = "{}" ] && continue
+    local live; live="$(read_projected "$logical")"
+    [ "$live" != "null" ] || continue
+    doc=$(printf '%s' "$live" | jq -c --argjson m "$(keys_for "$logical")" \
+      '. as $in | reduce $m[] as $k ({}; if ($in|has($k)) then .[$k]=$in[$k] else . end)')
+    # `manages` is the whole key list, not just the keys that happen to be set.
+    # A snapshot has to be able to restore a key being *absent*, or coming back to
+    # it leaves behind whatever the profile you were on had added.
     targets=$(jq -cn --argjson acc "$targets" --arg l "$logical" --argjson p "$doc" \
-      --argjson m "$(printf '%s' "$doc" | jq -c 'keys')" \
-      --arg fp "$(fingerprint "$file" "$(keys_for "$logical")")" \
+      --argjson m "$(keys_for "$logical")" \
+      --arg fp "$(fingerprint_logical "$logical")" \
       --arg shape "$([ "$logical" = ohmy ] && echo oh-my-openagent || echo opencode)" \
       '$acc + [{file:$l, shape:$shape, manages:$m, fingerprint:$fp, payload:$p}]')
   done
 
-  [ "$targets" != "[]" ] || refuse "E_EMPTY" "There is nothing in your opencode config to save."
+  # An opencode.json holding only providers and MCP servers is a perfectly normal
+  # config and the most common one on the plain side. It captures as a profile that
+  # pins nothing, which is a legitimate thing to come back to.
+  [ "$targets" != "[]" ] || refuse "E_EMPTY" "No opencode config file to save."
 
   # Two or three letters keeps the bar a fixed width. Initials of every word, not the
   # first two letters: "Full Opus" is FO, "Full OX Alpha" is FOA; one word takes two.
@@ -867,8 +1112,8 @@ cmd_delete() {
 cmd_list() {
   ensure_state
   local ohmy_fp opencode_fp
-  ohmy_fp="$(fingerprint "$(resolve_ohmy)" "$OHMY_KEYS")"
-  opencode_fp="$(fingerprint "$(resolve_opencode)" "$OPENCODE_KEYS")"
+  ohmy_fp="$(fingerprint_logical ohmy)"
+  opencode_fp="$(fingerprint_logical opencode)"
 
   # This is the one command whose output grows with the store, so it is the one that
   # reads it through the guard rather than by handing jq a path to reopen. Bounding

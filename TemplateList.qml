@@ -45,27 +45,40 @@ Item {
     return out
   }
 
-  readonly property bool ohmyHere: root.shape === "oh-my-openagent"
+  // Whether the oh-my-openagent half is live here has two halves of its own: the
+  // machine has to run it, and the setting has to allow writing it. Reading only
+  // the first is how a row promised agents the install then quietly skipped.
+  property bool manageOhMy: true
+  property bool manageOpencode: true
 
+  readonly property bool ohmyHere: root.shape === "oh-my-openagent" && root.manageOhMy
+
+  // Says what installing this template writes, which has to be the same list the
+  // install actually writes — including the opencode base it carries across when
+  // oh-my-openagent is the shape.
   function fillsFor(tpl) {
     if (!tpl) return ""
+    var bits = []
     if (root.ohmyHere && tpl.ohmy) {
       var a = Object.keys(tpl.ohmy.agents || {}).length
       var c = Object.keys(tpl.ohmy.categories || {}).length
-      return a + (a === 1 ? " agent" : " agents") + (c > 0 ? " and " + c + " categories" : "")
+      if (a > 0) bits.push(a + (a === 1 ? " agent" : " agents"))
+      if (c > 0) bits.push(c + " categories")
     }
-    if (tpl.opencode) {
-      var n = Object.keys(tpl.opencode.agent || {}).length
-      var bits = []
+    if (root.manageOpencode && tpl.opencode) {
       if (tpl.opencode.model) bits.push("the default model")
-      if (n > 0) bits.push(n + (n === 1 ? " agent" : " agents"))
-      return bits.join(" and ")
+      if (!root.ohmyHere) {
+        var n = Object.keys(tpl.opencode.agent || {}).length
+        if (n > 0) bits.push(n + (n === 1 ? " agent" : " agents"))
+      }
     }
-    return ""
+    if (bits.length === 0) return ""
+    if (bits.length === 1) return bits[0]
+    return bits.slice(0, -1).join(", ") + " and " + bits[bits.length - 1]
   }
 
   function usableHere(tpl) {
-    return root.ohmyHere ? !!(tpl && (tpl.ohmy || tpl.opencode)) : !!(tpl && tpl.opencode)
+    return root.fillsFor(tpl) !== ""
   }
 
   function selectedTemplate() {
@@ -117,8 +130,9 @@ Item {
         var base = "Each one sets a model on every agent, matched to what that agent does — the "
                  + "heavy thinking on a strong model, the file-scanning on a cheap fast one. "
         return base + (root.ohmyHere
-          ? "Your config is oh-my-openagent, so they fill its agents and categories."
-          : "Your config is plain opencode, so they fill its agents. The oh-my-openagent half of "
+          ? "You run oh-my-openagent, so they fill its agents and categories. Its agents "
+          + "supersede opencode's own, so only the base model comes across from that half."
+          : "You run plain opencode, so they fill its agents. The oh-my-openagent half of "
           + "each template is left alone unless you install that plugin.")
       }
       color: root.muted
@@ -210,7 +224,8 @@ Item {
           Text {
             anchors.verticalCenter: parent.verticalCenter
             textFormat: Text.PlainText
-            text: "sets " + root.fillsFor(modelData)
+            visible: text !== ""
+            text: root.fillsFor(modelData) === "" ? "" : "sets " + root.fillsFor(modelData)
             color: root.veryMuted
             font.family: root.fontFamily
             font.pixelSize: Style.font.caption
