@@ -20,17 +20,28 @@ BarWidget {
   readonly property string modelName: panel ? panel.activeModel : ""
   readonly property bool drift: panel ? panel.drift === true : false
   readonly property bool broken: panel ? panel.configBroken === true : false
-  readonly property bool topTier: panel ? panel.activeTier === "top" : false
+  readonly property string tier: panel ? panel.activeTier : "unknown"
+  readonly property bool topTier: root.tier === "top"
 
   // On a transparent bar the wallpaper is the backdrop: barForeground's luminance, not the bar background, decides the side.
   readonly property bool onDarkSurface:
     Palette.lumOf(root.bar ? root.bar.barForeground : Color.foreground) > 0.5
 
-  // A config that will not parse outranks everything; after that only "top of the ladder" is worth a colour.
-  readonly property color glyphColor: {
+  // The silhouette stays the bar's own foreground: the mark has to read as opencode
+  // first and as state second, and a frame that changes hue on every switch stops
+  // being a logo. Only a config that will not parse may recolour the whole thing.
+  readonly property color frameColor: root.broken
+    ? (root.bar ? root.bar.urgent : Color.urgent)
+    : (root.bar ? root.bar.barForeground : Color.foreground)
+
+  // The cursor block is the one state channel. Cost is ordinal, so it grades by
+  // alpha off the frame exactly like the panel's dot, and only the top of the
+  // ladder earns opencode's own purple.
+  readonly property color cursorColor: {
     if (root.broken) return root.bar ? root.bar.urgent : Color.urgent
     if (root.topTier) return Palette.opencodeInkOn(root.onDarkSurface)
-    return root.bar ? root.bar.barForeground : Color.foreground
+    if (root.tier === "unknown") return Util.alpha(root.frameColor, Palette.markNeutralAlpha())
+    return Util.alpha(root.frameColor, Palette.tierAlpha(root.tier))
   }
 
   readonly property string labelText: {
@@ -119,16 +130,11 @@ BarWidget {
         width: root.labelText !== "" ? Style.bar.iconCanvas : Style.bar.iconSlot
         height: Style.bar.iconCanvas
 
-        OpticalGlyph {
-          id: glyph
-          anchors.fill: parent
-          // nf-md-layers_triple: a stack with one on top. Not a robot — the bar already has one, for the agents panel.
-          text: "󰽘"
-          color: root.glyphColor
-          fontFamily: root.bar ? root.bar.fontFamily : Style.font.family
-          fontSize: Style.bar.iconFont
-
-          Behavior on color { ColorAnimation { duration: 160; easing.type: Easing.OutCubic } }
+        OpencodeMark {
+          anchors.centerIn: parent
+          size: Style.bar.iconFont
+          frameColor: root.frameColor
+          cursorColor: root.cursorColor
         }
 
         // Drawn over the glyph rather than beside it: a dot that adds width

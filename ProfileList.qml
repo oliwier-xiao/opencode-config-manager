@@ -110,16 +110,18 @@ Item {
       }
       detail: root.shapeName
 
+      // The same mark as the bar, mounted from the same file, so the two can never
+      // drift apart. The cursor carries the same cost band the row dots use.
       iconComponent: Component {
-        Text {
-          // The same mark as the bar, so the panel is visibly the same plugin.
-          text: "󰽘"
-          color: root.errorCode !== "" ? Color.urgent
-               : (root.activeTier === "top"
-                  ? Palette.opencodeInk(Color.popups.background)
-                  : root.foreground)
-          font.family: root.fontFamily
-          font.pixelSize: Style.font.display
+        OpencodeMark {
+          size: Style.font.display
+          frameColor: root.errorCode !== "" ? Color.urgent : root.foreground
+          cursorColor: {
+            if (root.errorCode !== "") return Color.urgent
+            if (root.activeTier === "top") return Palette.opencodeInk(Color.popups.background)
+            if (root.activeTier === "unknown") return Util.alpha(root.foreground, Palette.markNeutralAlpha())
+            return Util.alpha(root.foreground, Palette.tierAlpha(root.activeTier))
+          }
         }
       }
     }

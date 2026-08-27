@@ -10,7 +10,8 @@ DEST="$HOME/.config/omarchy/plugins/oliwier.opencode-configs"
 
 mkdir -p "$DEST"
 rsync -a --delete \
-  --exclude '.git' --exclude 'dev-sync.sh' --exclude '*.md' --exclude '.gitignore' \
+  --exclude '.git' --exclude 'dev-sync.sh' --exclude 'mark-preview.qml' \
+  --exclude '*.md' --exclude '.gitignore' \
   "$SRC/" "$DEST/"
 chmod +x "$DEST/bin/oc-profiles" "$DEST/bin/sync-models.sh"
 

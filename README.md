@@ -12,6 +12,25 @@ Works with **classic opencode** and with **oh-my-openagent** — it reads your c
 carrying a list of its own, so it shows whatever is actually in the file, including agents you
 added yourself. The pill in the top right of the panel says which of the two it found.
 
+### What the mark is telling you
+
+The icon is opencode's own mark, drawn rather than shipped as an image, so it takes the bar's
+colours instead of fighting them. The frame stays your bar foreground and never moves: it is a
+logo, and a logo that changes hue on every switch stops being one. The **cursor block inside it**
+is the part that carries state.
+
+![Every state the mark can reach](docs/mark-states.png)
+
+Cost is ordinal, so it is one colour at graded strength rather than a palette of unrelated hues —
+dim for free, brighter as the profile gets expensive, and opencode's own purple for the profile at
+the top of your ladder. A config that will not parse turns the whole mark your theme's urgent
+colour. It is the same grading the dots in the profile list use, so the bar and the panel are
+never telling you two different things.
+
+`mark-preview.qml` in the repository root renders every one of those states without starting the
+shell — `qml6 mark-preview.qml` for a window, or `QT_QPA_PLATFORM=offscreen qml6 mark-preview.qml`
+to regenerate the image above.
+
 An Omarchy **Quattro** shell plugin (`bar-widget`). Needs `omarchy-shell`, `opencode`, and the
 `jq`, `python3`, `flock`, `sha256sum` and `pgrep` an Arch install already has.
 
@@ -59,15 +78,27 @@ To add more, press **Add a profile**. It offers three ways in:
 ## Plain opencode
 
 If you use opencode on its own, it manages the `model`, `small_model` and `agent` keys of
-`~/.config/opencode/opencode.json`. That means the built-in `plan` and `build`, and any agent you
-have defined in that file's `agent` key: add one and it appears here on the next panel open, with
-no configuration.
+`~/.config/opencode/opencode.json`. That means opencode's own built-ins — `build`, `plan`,
+`general`, `explore` and `scout` — plus any agent you have defined in that file's `agent` key: add
+one and it appears here on the next panel open, with no configuration.
 
-![Profiles, plain opencode](preview.png)
+![Profiles, plain opencode](docs/plain-profiles.png)
 
 Every profile says how many entries it pins and to what. The dot on the left is what the profile
 costs to run — dim for free, brighter as it gets expensive, and opencode's own purple for the
 profile that is at the top of your ladder.
+
+### Pinned is not the same as running
+
+Neither config shape writes down an agent you have never overridden — both leave it on its own
+default. So a file naming two agents still runs the whole roster, and a panel that listed only the
+file would hide the rest behind nothing at all: you cannot pin an agent it never draws.
+
+So the editor draws the whole roster. Your file's own entries come first, in the file's order, and
+the rest follow as empty rows waiting for a model. The count in the summary only ever counts the
+ones that actually pin something — `2 pinned` out of nineteen rows means two agents are held to a
+model by you and seventeen are running on whatever their default is today. An agent the roster has
+never heard of still shows up, because the file is read first and the roster only appends.
 
 Editing one gives you every agent in the file, with the model, the reasoning effort, and what each
 costs per million tokens:
