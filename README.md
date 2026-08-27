@@ -275,6 +275,30 @@ a machine that does not have it installed.
 shell — a bar widget already mounted in a slot keeps its old instance otherwise, so a
 change lands in the registry and not on the screen.
 
+## Driving it from a script
+
+The widget answers on the shell's IPC, under `oliwier.opencode-configs`:
+
+```bash
+omarchy-shell ipc call oliwier.opencode-configs toggle
+omarchy-shell ipc call oliwier.opencode-configs refresh
+omarchy-shell ipc call oliwier.opencode-configs reload
+```
+
+`open`, `close`, `show`, `hide` and `toggle` move the panel. `refresh` makes it
+re-read your config and rebuild the model list. `reload` asks every running opencode
+to re-read its config, the same `SIGUSR2` **Restart opencode** sends.
+
+None of them writes a config or switches a profile — a switch is a thing you do in
+the panel. `reload` is the only one that reaches another process, and the pid it
+signals is pinned to the process that was checked: same start tick, still an
+opencode, still handling the signal, checked in the instruction before the one that
+sends it. `SIGUSR2` terminates a process that does not handle it, and pids get reused.
+
+`bin/oc-profiles` is the whole of what writes, and it runs by hand too — `detect`,
+`list`, `apply <id>`, `revert`, `backups`. It prints JSON and exits 0 for done,
+2 for refused with nothing written, 3 for a partial write that was put back.
+
 ## Settings
 
 Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy/shell.json`.

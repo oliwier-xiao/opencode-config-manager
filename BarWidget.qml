@@ -66,10 +66,11 @@ BarWidget {
 
   function open() { if (panelLoader.item) panelLoader.item.open() }
   function close() { if (panelLoader.item) panelLoader.item.close() }
+  function reloadOpencode() { if (panelLoader.item) panelLoader.item.reloadRunningOpencode() }
+
   function togglePanel() { if (panelLoader.item) panelLoader.item.toggle() }
   function closeForPopoutSwitch() { if (panelLoader.item) panelLoader.item.closeForPopoutSwitch() }
   function refresh() { if (panelLoader.item) panelLoader.item.refresh() }
-  function reloadOpencode() { if (panelLoader.item) panelLoader.item.reloadRunningOpencode() }
 
   implicitWidth: slot.implicitWidth
   implicitHeight: slot.implicitHeight
@@ -88,6 +89,12 @@ BarWidget {
     }
   }
 
+  // Anything running as this user can call these, so none of them writes a config
+  // or moves a profile: they move this panel around, make it re-read, or ask a
+  // running opencode to re-read its own config. `reload` is the only one that
+  // touches another process at all, and the pid it signals is pinned to the
+  // process that was checked — see reload_opencode in bin/oc-profiles. Documented
+  // in the README rather than left as an undeclared surface.
   IpcHandler {
     target: "oliwier.opencode-configs"
 

@@ -137,6 +137,16 @@ often they appear in his review comments:
 - **A missing helper says which one.** Without this, every command refused with a
   story about the profile store.
 
+- **The pid that gets signalled is pinned to the process that was checked.**
+  `SIGUSR2` terminates a process that does not handle it, and pids get reused, so
+  the start tick, the command name and the handler are all rechecked in the
+  instruction before the `kill` rather than once at the top of a loop.
+- **No runtime value reaches interpreter source.** The signal-mask check spliced a
+  value read at runtime into a `python3 -c` string; it is bash arithmetic now.
+- **The IPC surface is documented rather than undeclared.** None of its methods
+  writes a config or switches a profile; `reload` is the only one that reaches
+  another process, and it now goes through the identity check above.
+
 One of these was a bug in the pass above it: `mktemp_tracked` and `stage` are called
 inside `$( )`, so their appends to the cleanup array happened in a subshell and never
 reached the trap. Cleanup is by filename prefix now, and the test that covers it
