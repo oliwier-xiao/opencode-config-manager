@@ -117,7 +117,7 @@ If you run the [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent
 manages `~/.config/opencode/oh-my-openagent.json` — every agent, every category, and the fallback
 chain behind each one. It detects which of the two you have; you do not configure it.
 
-![Profiles, oh-my-openagent](docs/panel-profiles.png)
+![Profiles, oh-my-openagent](docs/panel-profiles.png?v=2)
 
 ![Editing a profile](docs/panel-editor.png)
 
