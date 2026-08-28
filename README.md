@@ -265,8 +265,8 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-118 checks over the reader and writer, the hardening, the row model, the JSONC editor,
-shape detection and the write path.
+158 checks over the reader and writer, the hardening, the row model, the JSONC editor,
+shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
 a machine that does not have it installed.

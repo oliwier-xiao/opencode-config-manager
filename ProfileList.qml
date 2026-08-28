@@ -14,6 +14,10 @@ Item {
   property var profiles: []
   property var catalogIndex: ({})
   property string activeProfileId: ""
+  // False until both `list` and `detect` have answered once. Everything this screen
+  // says about the running config is a claim about disk, and before the second half
+  // lands the panel does not yet know enough to make one.
+  property bool ready: true
   property bool drift: false
   property bool busy: false
   property string shapeName: ""
@@ -104,9 +108,13 @@ Item {
       // PanelHero is the shell's, so its Text is not ours to set PlainText on.
       // Everything reaching it is neutralised on the way instead.
       title: Model.plain(root.activeProfile ? root.activeProfile.name
-           : (root.activeProfileId ? root.activeProfileId : "Custom"))
+           : (root.activeProfileId ? root.activeProfileId
+           : (root.ready ? "Custom" : "Opencode")))
       meta: {
         if (root.errorCode !== "") return "CONFIG NOT READ"
+        // "Nothing matches" is a finding, not a default. Until the reads are in,
+        // say what is actually happening instead of asserting the worst case.
+        if (!root.ready) return "READING WHAT IS ON DISK"
         if (!root.activeProfile) return "NO PROFILE MATCHES WHAT IS ON DISK"
         return Model.plain(Model.summary(root.activeProfile).toUpperCase())
       }
@@ -133,7 +141,10 @@ Item {
     // ---- The one strip that changes: an error, a fresh switch, or drift — never two at once.
     Loader {
       width: parent.width
-      active: root.errorCode !== "" || root.toast !== "" || root.notice !== "" || root.drift
+      // The drift strip waits for `ready` for the same reason the heading does: before
+      // detect lands it would be describing a config the panel has not finished reading.
+      active: root.errorCode !== "" || root.toast !== "" || root.notice !== ""
+              || (root.drift && root.ready)
       // Column skips invisible children; without this the strip's two gaps stay behind as a hole.
       visible: active
       height: active ? implicitHeight : 0

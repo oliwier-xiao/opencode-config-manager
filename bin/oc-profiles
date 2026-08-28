@@ -164,6 +164,23 @@ fingerprint_logical() {
   payload_fingerprint "$doc" "$(keys_for "$logical")"
 }
 
+# The first saved profile whose every target matches what is on disk, or an empty
+# string. This is the same question cmd_list answers for the panel, asked here so a
+# command that has just rewritten the config can record what it landed on rather
+# than leaving the store saying nothing is active.
+matching_profile_id() {
+  local ohmy_fp opencode_fp
+  ohmy_fp="$(fingerprint_logical ohmy)"
+  opencode_fp="$(fingerprint_logical opencode)"
+  store_jq -r --arg ohmy "$ohmy_fp" --arg opencode "$opencode_fp" '
+    [ .profiles[]
+      | select( (.targets // [])
+                | length > 0
+                and ( map( .fingerprint == (if .file == "ohmy" then $ohmy else $opencode end) )
+                      | all ) )
+      | .id ] | .[0] // ""' 2>/dev/null || printf ''
+}
+
 # fingerprint() over a profile's stored payload instead of a file. It must project
 # through `manages` the same way, or a profile never matches the file it came from.
 payload_fingerprint() {
@@ -988,6 +1005,12 @@ cmd_revert() {
   local back_to
   back_to=$(jq -r '.fromProfileId // ""' "$meta_f" 2>/dev/null)
   rm -f "$meta_f"
+  # A backup taken before any profile was active records no `fromProfileId`, and
+  # older backups predate the field entirely. The config just put back is still
+  # either one of the saved profiles or it is not, and the store should say which:
+  # left null, the panel reports a config that matches "Saved config" exactly as
+  # matching no profile at all.
+  [ -n "$back_to" ] || back_to="$(matching_profile_id)"
   store_update --arg id "$back_to" --arg prev "$to_id" --arg at "$(now_iso)" --arg backup "$stamp" '
       .state.activeProfileId = (if $id == "" then null else $id end)
     | .state.previousProfileId = (if $prev == "" then null else $prev end)
@@ -1284,6 +1307,12 @@ cmd_list() {
 
   # `matches` makes a switch made outside this panel recognisable rather than reported as
   # damage. No jq `//` near a boolean: `false // true` is `true`, marking clean as drifted.
+  #
+  # `effectiveProfileId` is the one the panel should name. The stored id is only the
+  # last profile switched *to*, and several ordinary paths leave it null while the
+  # config on disk still matches a saved profile exactly — an undo to a backup taken
+  # before any profile was active is the common one. Deriving drift from the stored id
+  # alone reports such a config as matching nothing, which is the opposite of true.
   printf '%s' "$raw" | jq -c --arg ohmy "$ohmy_fp" --arg opencode "$opencode_fp" '
     . as $root
     | ($root.state.activeProfileId) as $id
@@ -1291,10 +1320,15 @@ cmd_list() {
         (p.targets // [])
         | length > 0
         and ( map( .fingerprint == (if .file == "ohmy" then $ohmy else $opencode end) ) | all );
-      . + { live: { ohmy: $ohmy, opencode: $opencode },
-            matches: [ $root.profiles[] | select(clean(.)) | .id ] }
-    | .drift = ( if $id == null then true
-                 else ( [ $root.profiles[] | select(.id == $id) ]
+      [ $root.profiles[] | select(clean(.)) | .id ] as $matches
+    | ( if ($id != null) and ( [ $root.profiles[] | select(.id == $id) ] | length ) > 0
+        then $id
+        else ( $matches[0] // null ) end ) as $eff
+    | . + { live: { ohmy: $ohmy, opencode: $opencode },
+            matches: $matches,
+            effectiveProfileId: $eff }
+    | .drift = ( if $eff == null then true
+                 else ( [ $root.profiles[] | select(.id == $eff) ]
                         | if length == 0 then true else (clean(.[0]) | not) end )
                  end )
   ' | head -c "$MAX_EMIT_BYTES"

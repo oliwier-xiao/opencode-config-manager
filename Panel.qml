@@ -78,6 +78,12 @@ Panel {
   property bool busy: false
   property bool loaded: false
 
+  // Both halves have to have answered once before the panel is entitled to say what
+  // is running. `list` returns in about a tenth of the time `detect` takes, so
+  // without this the first paint states — as fact, not as a pending read — that
+  // nothing matches, and draws the profile rows against the wrong shape.
+  readonly property bool ready: root.loaded && root.detected !== null
+
   property string view: "list"                 // "list" | "editor"
   property string editingId: ""
   property var draft: null
@@ -104,7 +110,11 @@ Panel {
   property string notice: ""
 
   readonly property var profiles: (store && store.profiles) || []
-  readonly property string activeProfileId: (store && store.state && store.state.activeProfileId) || ""
+  // Not store.state.activeProfileId: that is only the last profile switched *to*,
+  // and an undo to a backup taken before any profile was active leaves it null over
+  // a config that still matches a saved profile exactly. Model.resolveActiveId takes
+  // oc-profiles' own answer, which is the same one it derived `drift` from.
+  readonly property string activeProfileId: Model.resolveActiveId(store)
   readonly property bool drift: store ? store.drift === true : false
   readonly property var favorites: (store && store.favorites) || []
   readonly property var recents: (store && store.recents) || []
@@ -569,6 +579,7 @@ Panel {
 
         profiles: root.profiles
         activeProfileId: root.activeProfileId
+        ready: root.ready
         drift: root.drift
         busy: root.busy
         catalogIndex: root.catalogIndex
@@ -816,8 +827,14 @@ Panel {
         // Detect reads the rosters off the installed software and says which of
         // the two shapes is actually running. Both have to reach Model before
         // anything draws, or the first paint is of the wrong panel.
-        Model.setRoster(parsed.roster)
-        Model.setShape(String(parsed.shape || "opencode"))
+        var rosterMoved = Model.setRoster(parsed.roster)
+        var shapeMoved = Model.setShape(String(parsed.shape || "opencode"))
+        // Model.js is a `.pragma library`, so those two write globals that no
+        // binding depends on: every row already drawn keeps the shape it was drawn
+        // with. `list` almost always lands first, so that shape is the wrong one.
+        // Re-seating the store is the dependency all of them do share, and it is
+        // only paid when something actually moved.
+        if ((rosterMoved || shapeMoved) && root.loaded) root.store = Model.clone(root.store)
         // A config that will not parse is the one state where nothing else in
         // the panel means anything, so it outranks every other message.
         var warnings = parsed.warnings || []

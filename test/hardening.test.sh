@@ -156,6 +156,38 @@ case "$ERR" in *"is missing or not executable"*) ok "names the missing helper" ;
   *) no "names the missing helper" "said: $ERR" ;; esac
 is "and exits 1, not a refusal" "$rc" "1"
 
+# There is no QML runtime here, so what the panel *states* is held at the source
+# level. Each of these was a way the panel asserted something about the config it
+# had not finished reading, or kept describing a shape it had already been told
+# was wrong.
+echo "=== the panel does not assert what it has not read ==="
+qml_has(){ grep -qF "$2" "$REPO/$1" && ok "$3" || no "$3" "$1 no longer has: $2"; }
+qml_lacks(){ grep -qF "$2" "$REPO/$1" && no "$3" "$1 still has: $2" || ok "$3"; }
+
+qml_has  "Panel.qml" "Model.resolveActiveId(store)" \
+         "Panel takes the active profile from resolveActiveId"
+qml_lacks "Panel.qml" "store.state && store.state.activeProfileId" \
+         "Panel no longer reads the stored id as the only answer"
+qml_has  "Panel.qml" "root.loaded && root.detected !== null" \
+         "Panel is only ready once both reads have answered"
+qml_has  "Panel.qml" "ready: root.ready" \
+         "and hands that down to the list"
+# Model.js is a .pragma library: setShape writes a global no binding depends on,
+# and `list` beats `detect` every time, so without this the first paint keeps the
+# wrong shape until something unrelated invalidates it.
+qml_has  "Panel.qml" "root.store = Model.clone(root.store)" \
+         "a shape that moved forces the rows to be drawn again"
+qml_has  "ProfileList.qml" 'if (!root.ready) return "READING WHAT IS ON DISK"' \
+         "the heading waits before claiming nothing matches"
+qml_has  "ProfileList.qml" "(root.drift && root.ready)" \
+         "the drift strip waits for the same reason"
+
+echo "=== list answers which profile is running, not just which was chosen ==="
+D=$(mk eff)
+run "$D" capture "Mine" mine >/dev/null
+is "effectiveProfileId is emitted" \
+   "$(run "$D" list | jq -r 'has("effectiveProfileId")')" "true"
+
 echo "=== the two places that carry a version agree ==="
 MV=$(jq -r .version "$REPO/manifest.json")
 SV=$(grep -m1 '^VERSION=' "$REPO/bin/oc-profiles" | cut -d'"' -f2)

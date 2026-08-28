@@ -43,6 +43,16 @@ carried in this repository.
   walks up from the working directory for `.omo/` and `.opencode/`.
 - **The oh-my-openagent version probe reads the right path**, so the version is
   reported instead of coming back empty.
+- **A config that matches a saved profile is no longer reported as matching none.**
+  The panel decided what was running from `state.activeProfileId` alone — the id of
+  the last profile *switched to*. An undo to a backup taken before any profile was
+  active leaves that null, and the heading then read `Custom · no profile matches
+  what is on disk` over a config that matched a saved profile exactly, in the same
+  answer that listed it under `matches`. `list` now returns `effectiveProfileId`,
+  and derives `drift` from it.
+- **Undo records the profile it landed on.** When the backup names none to go back
+  to, the restored config is compared against the saved profiles and the one it
+  matches is marked active, instead of leaving the store saying nothing is.
 
 ### Changed
 
@@ -59,6 +69,12 @@ carried in this repository.
   lists in `lib/Model.js` are now only a fallback for a machine neither probe can read.
 - **A template applied under oh-my-openagent carries only the base model across** from
   its opencode half, rather than its `agent` block.
+- **The panel says what it is doing before it knows what is running.** `list` answers
+  in about a tenth of the time `detect` takes, so the first paint used to state — as
+  fact — that nothing matched, and drew the rows against the wrong shape. The heading
+  and the drift strip now wait for both reads, and a shape that arrives late forces
+  the rows to be drawn again: `lib/Model.js` is a `.pragma library`, so what it holds
+  is a global no QML binding can depend on.
 
 ### Hardened
 

@@ -72,5 +72,68 @@ t("oh-my-openagent rows keep the short string form", () => {
   assert.strictEqual(out.targets[0].payload.agents.sisyphus, "anthropic/claude-opus-5");
 });
 
+
+console.log("\n--- resolveActiveId: which profile the panel may call the running one ---");
+const store = (over) => Object.assign({
+  profiles: [{ id: "a", name: "A" }, { id: "b", name: "B" }],
+  state: { activeProfileId: null },
+  matches: []
+}, over || {});
+
+t("a stored id that still names a profile wins", () => {
+  eq(M.resolveActiveId(store({ state: { activeProfileId: "b" }, matches: ["a"] })), "b");
+});
+t("a stored id wins even when the config has drifted off it", () => {
+  eq(M.resolveActiveId(store({ state: { activeProfileId: "b" }, matches: [] })), "b");
+});
+t("no stored id falls back to what disk matches", () => {
+  eq(M.resolveActiveId(store({ matches: ["a"] })), "a");
+});
+t("a stored id naming a deleted profile falls back too", () => {
+  eq(M.resolveActiveId(store({ state: { activeProfileId: "gone" }, matches: ["b"] })), "b");
+});
+t("a match naming a profile the store no longer has is ignored", () => {
+  eq(M.resolveActiveId(store({ matches: ["gone"] })), "");
+});
+t("nothing stored and nothing matching reads as custom", () => {
+  eq(M.resolveActiveId(store({})), "");
+});
+t("oc-profiles' own answer is preferred over both", () => {
+  eq(M.resolveActiveId(store({ effectiveProfileId: "a", state: { activeProfileId: "b" } })), "a");
+});
+t("but only when it still names a profile", () => {
+  eq(M.resolveActiveId(store({ effectiveProfileId: "gone", state: { activeProfileId: "b" } })), "b");
+});
+t("junk in place of a store is not an active profile", () => {
+  eq(M.resolveActiveId(null), "");
+  eq(M.resolveActiveId("nope"), "");
+  eq(M.resolveActiveId({ profiles: "not a list", matches: "not a list" }), "");
+});
+
+console.log("\n--- setRoster/setShape report whether a repaint is owed ---");
+t("a shape that did not move reports no change", () => {
+  M.setShape("opencode");
+  assert.strictEqual(M.setShape("opencode"), false);
+  assert.strictEqual(M.setShape("oh-my-openagent"), true);
+  assert.strictEqual(M.setShape("oh-my-openagent"), false);
+});
+t("an empty or absent shape is not a change", () => {
+  M.setShape("opencode");
+  assert.strictEqual(M.setShape(""), false);
+  assert.strictEqual(M.setShape(null), false);
+  eq(M.shape(), "opencode");
+});
+t("the same roster twice reports no change", () => {
+  const r = { opencode: { agents: ["build", "plan"] },
+              ohmy: { agents: ["oracle"], categories: ["deep"] } };
+  M.setRoster(r);
+  assert.strictEqual(M.setRoster(r), false);
+  assert.strictEqual(M.setRoster({ opencode: { agents: ["build", "plan", "explore"] } }), true);
+});
+t("a roster the probe could not read is not a change", () => {
+  assert.strictEqual(M.setRoster({ opencode: { agents: [] } }), false);
+  assert.strictEqual(M.setRoster(null), false);
+});
+
 console.log("\n" + (fail ? "FAILED " + fail + " / " : "") + pass + " passed");
 process.exit(fail ? 1 : 0);

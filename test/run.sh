@@ -18,7 +18,8 @@ for suite in "bash $REPO/test/safe-read.test.sh" \
              "node $REPO/test/model.test.js" \
              "python3 $REPO/test/jsonc.test.py" \
              "bash $REPO/test/detect.test.sh" \
-             "bash $REPO/test/write.test.sh"; do
+             "bash $REPO/test/write.test.sh" \
+             "bash $REPO/test/match.test.sh"; do
   printf '\n=== %s\n' "${suite##*/}"
   $suite || rc=1
 done
