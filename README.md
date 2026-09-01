@@ -219,6 +219,13 @@ else gets a neutral mark — the provider is written into every model id anyway.
 - <kbd>Tab</kbd> switch between "models you can use" and "every model there is"
 - Type a `provider/model` id that is not in the list and it will still let you use it
 
+Picking a model is also where this plugin stops and the provider begins. If a model answers with
+**"The response was blocked by the provider's content filter"** — and keeps doing it, even for one
+harmless word — that is coming from the provider, not from anything written here.
+[Troubleshooting](docs/TROUBLESHOOTING.md) explains what the message means, why the message after it
+fails too, and what to change. It also covers an oh-my-openagent migration bug that quietly drops
+the model you pinned to an agent.
+
 ---
 
 ## Switching, safely
