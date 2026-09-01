@@ -117,6 +117,13 @@ If you run the [oh-my-openagent](https://github.com/code-yeongyu/oh-my-openagent
 manages `~/.config/opencode/oh-my-openagent.json` — every agent, every category, and the fallback
 chain behind each one. It detects which of the two you have; you do not configure it.
 
+**oh-my-openagent 4.x is not supported yet.** It moved its config to `~/.omo/omo.jsonc`, deletes the
+old file once it has migrated it, and writes JSONC — which this plugin refuses to touch, because it
+cannot put your comments back. So the panel finds nothing to manage and says so in the footer rather
+than drawing an empty roster and letting you conclude it broke. Your config is not in danger: with
+nothing found, nothing is written. Stay on 3.x if you want the panel to manage your agents, and see
+[Troubleshooting](docs/TROUBLESHOOTING.md#oh-my-openagent-4x).
+
 ![Profiles, oh-my-openagent](docs/panel-profiles.png?v=2)
 
 ![Editing a profile](docs/panel-editor.png)

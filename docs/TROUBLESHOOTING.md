@@ -136,3 +136,52 @@ switch — the same guarantee described in [Switching, safely](../README.md#swit
 - [Handle streaming refusals](https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/handle-streaming-refusals) — the context-reset requirement
 - [Refusals and fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) — categories, response shape, server-side fallback
 - [opencode#35475](https://github.com/anomalyco/opencode/issues/35475) — a false positive, billed for output nobody received
+
+---
+
+## oh-my-openagent 4.x
+
+Version 4 moved its config from `~/.config/opencode/oh-my-openagent.json` to `~/.omo/omo.jsonc`,
+migrated the contents across, and deleted the old file. This plugin still looks in the old place, so
+on 4.x it finds nothing to manage and the footer says so. Nothing is written when nothing is found,
+so your config is safe either way — but the panel cannot edit your agents until support lands.
+
+Two things make this more than a change of path. The new file is JSONC and opens with a
+`// OMO configuration` comment, and this plugin refuses files it cannot write back without losing
+your comments. The shape changed too: 4.x wraps everything in a top-level `"[opencode]"` key, and an
+agent entry now spells reasoning effort as `reasoning` rather than `variant`.
+
+### Your agents may be running a model you did not choose
+
+Independently of this plugin, the 4.x migration has a bug worth knowing about. It rewrites each agent
+to a plural `models` array and deletes the `model`, `reasoning` and `fallback_models` keys — but the
+schema the plugin actually reads accepts only the singular keys and has no `models`. It is a
+non-strict schema, so the key is not rejected loudly; it is **stripped**, and every agent arrives at
+the runtime with an empty config and falls back to a built-in default chain.
+
+The result is silent: your pins are gone and agents run on whatever the default resolves to. Check
+with:
+
+```bash
+omo doctor
+```
+
+`Unknown config key: agents.<name>.models` is the symptom. To repair it, turn each agent's `models`
+array back into the singular form — first entry becomes `model` plus `reasoning`, the rest become
+`fallback_models`:
+
+```jsonc
+"sisyphus": {
+  "model": "anthropic/claude-opus-5",
+  "reasoning": "max",
+  "fallback_models": [{ "model": "google/gemini-3.1-pro-preview", "reasoning": "high" }]
+}
+```
+
+Leave `categories` alone — there `models` is correct and is genuinely read. Also delete any top-level
+`fallback_models`, which no schema accepts.
+
+Do not run `oh-my-openagent config migrate` to fix this, and ignore the doctor's own hint to replace
+`fallback_models` with `models`: both put back the shape the runtime cannot read. The real fix was
+merged upstream but has never shipped on 4.x — see
+[#7521](https://github.com/code-yeongyu/oh-my-openagent/issues/7521).

@@ -230,6 +230,18 @@ resolve_ohmy() {
   printf '%s' "$CFG_DIR/oh-my-openagent.json"
 }
 
+# oh-my-openagent 4.x moved its config out of the opencode directory altogether, to
+# ~/.omo/, and deletes the old file once it has migrated it. Look for it by shape
+# rather than by version number: what matters is that a live config exists somewhere
+# this tool cannot read, and that stays true whenever the next version moves again.
+resolve_omo() {
+  local dir="${OMO_CONFIG_DIR:-$HOME/.omo}" p
+  for p in "$dir/omo.jsonc" "$dir/omo.json"; do
+    [ -f "$p" ] && { printf '%s' "$p"; return; }
+  done
+  printf ''
+}
+
 resolve_opencode() {
   local p
   for p in "$CFG_DIR/opencode.jsonc" "$CFG_DIR/opencode.json" "$CFG_DIR/config.json"; do
@@ -275,6 +287,8 @@ cmd_detect() {
   local ohmy opencode
   ohmy="$(resolve_ohmy)"
   opencode="$(resolve_opencode)"
+  local omo
+  omo="$(resolve_omo)"
 
   local oc_version omo_version
   oc_version="$(command -v opencode >/dev/null 2>&1 && opencode --version 2>/dev/null | tr -d '\r' || true)"
@@ -302,6 +316,7 @@ cmd_detect() {
     --arg ohmyPath "$ohmy" \
     --arg opencodePath "$opencode" \
     --arg homePath "$HOME_CFG" \
+    --arg omoPath "$omo" \
     --arg ohmyFp "$(fingerprint "$ohmy" "$OHMY_KEYS")" \
     --arg opencodeFp "$(fingerprint "$opencode" "$OPENCODE_KEYS")" \
     --arg ocVersion "$oc_version" \
@@ -312,6 +327,7 @@ cmd_detect() {
     --argjson ohmyExists "$([ -f "$ohmy" ] && echo true || echo false)" \
     --argjson opencodeExists "$([ -f "$opencode" ] && echo true || echo false)" \
     --argjson homeExists "$([ -f "$HOME_CFG" ] && echo true || echo false)" \
+    --argjson omoExists "$([ -n "$omo" ] && echo true || echo false)" \
     --argjson ohmyParses "$(jq -e . "$ohmy" >/dev/null 2>&1 && echo true || echo false)" \
     --argjson opencodeParses "$(jq -e . "$opencode" >/dev/null 2>&1 && echo true || echo false)" \
     --argjson ohmyWritable "$([ -w "$ohmy" ] || [ ! -e "$ohmy" ] && [ -w "$(dirname "$ohmy")" ] && echo true || echo false)" \
@@ -355,13 +371,17 @@ cmd_detect() {
           # A model or agent key here is loaded last and beats everything this
           # plugin writes. Saying so is the whole reason the file is reported.
           overrides: (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent" or . == "small_model")))
-        }
+        },
+        # Reported but never read or written: this is the 4.x location, and the panel
+        # only needs to know it is there so it can say so instead of drawing nothing.
+        omo: { path: $omoPath, exists: $omoExists }
       },
       warnings:
         ( (if $ohmyExists and ($ohmyParses|not) then [{code:"E_PARSE", file:$ohmyPath}] else [] end)
         + (if $opencodeExists and ($opencodeParses|not) then [{code:"E_PARSE", file:$opencodePath}] else [] end)
         + (if ($ohmyPath|endswith(".jsonc")) then [{code:"E_JSONC", file:$ohmyPath}] else [] end)
         + (if ($opencodePath|endswith(".jsonc")) then [{code:"E_JSONC", file:$opencodePath}] else [] end)
+        + (if ($omoExists and ($ohmyExists|not)) then [{code:"W_OMO_ELSEWHERE", file:$omoPath}] else [] end)
         + ($shadows | map({code:"W_SHADOWED", dir:.}))
         + (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent"))
              | map({code:"W_HOME_OVERRIDE", key:., file:$homePath})) )

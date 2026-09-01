@@ -807,6 +807,13 @@ Panel {
         // everything this panel writes — unsaid, a switch looks like it did nothing.
         var notice = ""
         for (var w = 0; w < warnings.length; w++) {
+          // oh-my-openagent 4.x keeps its config outside the opencode directory. Without
+          // this the panel just draws no agents at all, which reads as "it broke".
+          if (warnings[w].code === "W_OMO_ELSEWHERE") {
+            notice = "oh-my-openagent keeps its config in " + warnings[w].file
+                   + " now, which this panel cannot read yet. Its agents and categories are not shown."
+            break
+          }
           if (warnings[w].code === "W_HOME_OVERRIDE") {
             notice = "~/.opencode/opencode.json sets “" + warnings[w].key
                    + "”, and it is read after this one. Switching profiles will not change it."
