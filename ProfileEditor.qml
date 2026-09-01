@@ -99,8 +99,9 @@ Item {
     if (!root.profile) return
     var index = root.catalogIndex
     root.profileEdited(Model.setAllModels(root.profile, modelId, function (id, row) {
-      // Keep the row's effort, stepped down to one this model offers. Only
-      // oh-my-openagent has a variant field; opencode.json takes a bare string.
+      // Keep the row's effort, stepped down to one this model offers. Only the
+      // oh-my-openagent rows carry one — opencode accepts a `variant` too, but the
+      // catalogue's effort names are oh-my-openagent's, so none is offered there.
       return row.file === "ohmy" ? Catalog.nearestVariant(index, id, row.variant || "high") : ""
     }))
   }

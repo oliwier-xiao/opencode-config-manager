@@ -377,10 +377,13 @@ cmd_detect() {
         omo: { path: $omoPath, exists: $omoExists }
       },
       warnings:
-        ( (if $ohmyExists and ($ohmyParses|not) then [{code:"E_PARSE", file:$ohmyPath}] else [] end)
-        + (if $opencodeExists and ($opencodeParses|not) then [{code:"E_PARSE", file:$opencodePath}] else [] end)
-        + (if ($ohmyPath|endswith(".jsonc")) then [{code:"E_JSONC", file:$ohmyPath}] else [] end)
-        + (if ($opencodePath|endswith(".jsonc")) then [{code:"E_JSONC", file:$opencodePath}] else [] end)
+        # opencode has seeded a .jsonc global config since 1.14.49, and the file it
+        # writes holds no comments at all. Refusing on the extension called every
+        # fresh install broken; what matters is whether the file actually parses.
+        ( (if $ohmyExists and ($ohmyParses|not)
+             then [{code:(if ($ohmyPath|endswith(".jsonc")) then "E_JSONC" else "E_PARSE" end), file:$ohmyPath}] else [] end)
+        + (if $opencodeExists and ($opencodeParses|not)
+             then [{code:(if ($opencodePath|endswith(".jsonc")) then "E_JSONC" else "E_PARSE" end), file:$opencodePath}] else [] end)
         + (if ($omoExists and ($ohmyExists|not)) then [{code:"W_OMO_ELSEWHERE", file:$omoPath}] else [] end)
         + ($shadows | map({code:"W_SHADOWED", dir:.}))
         + (($homeDoc // {}) | keys | map(select(. == "model" or . == "agent"))
@@ -396,10 +399,14 @@ preflight() {
   local logical="$1" payload="$2" file="$3"
 
   [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
-  case "$file" in
-    *.jsonc) refuse "E_JSONC" "$(basename "$file") has comments in it. Nothing was changed." ;;
-  esac
-  jq -e . "$file" >/dev/null 2>&1 || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
+  # A .jsonc that parses as strict JSON has nothing to lose in a rewrite, and that is
+  # exactly what opencode seeds. Only refuse the ones that really do carry comments.
+  if ! jq -e . "$file" >/dev/null 2>&1; then
+    case "$file" in
+      *.jsonc) refuse "E_JSONC" "$(basename "$file") has comments in it. Nothing was changed." ;;
+      *)       refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed." ;;
+    esac
+  fi
   [ -w "$file" ] || refuse "E_PERM" "Cannot write $(basename "$file")."
 
   # Every model reference must look like provider/model. A typo here reaches
@@ -411,6 +418,18 @@ preflight() {
     | map(select(test("^[A-Za-z0-9~._-]+(/[^/[:space:]]+)+$") | not))
     | unique | .[]' 2>/dev/null | head -1)
   [ -z "$bad" ] || refuse "E_MODEL_SYNTAX" "\"$bad\" is not a provider/model id."
+
+  # The panel is not the only thing that can write the store. opencode validates
+  # agent.<name> as an object and refuses the whole file - providers, MCP servers
+  # and keys included - over a bare string, so it is worth catching before the write.
+  if [ "$logical" = "opencode" ]; then
+    local shape_bad
+    shape_bad=$(printf '%s' "$payload" | jq -r '
+      (.agent // {}) | if type != "object" then "agent"
+      else (to_entries[] | select(.value | type != "object") | .key) end' 2>/dev/null | head -1)
+    [ -z "$shape_bad" ] || refuse "E_AGENT_SHAPE" \
+      "agent.$shape_bad has to be an object; opencode rejects the whole file otherwise."
+  fi
 
   if [ "$logical" = "ohmy" ]; then
     local forbidden
@@ -427,9 +446,12 @@ preflight() {
 # a forward write does — the one path that used to skip every check.
 preflight_restore() {
   local dest="$1" src="$2"
-  case "$dest" in
-    *.jsonc) refuse "E_JSONC" "$(basename "$dest") has comments in it. Nothing was changed." ;;
-  esac
+  if [ -f "$dest" ] && ! jq -e . "$dest" >/dev/null 2>&1; then
+    case "$dest" in
+      *.jsonc) refuse "E_JSONC" "$(basename "$dest") has comments in it. Nothing was changed." ;;
+      *)       refuse "E_PARSE" "$(basename "$dest") will not parse. Nothing was changed." ;;
+    esac
+  fi
   if [ -e "$dest" ] && [ ! -w "$dest" ]; then refuse "E_PERM" "Cannot write $(basename "$dest")."; fi
   jq -e . "$src" >/dev/null 2>&1 || refuse "E_PARSE" "That backup is not readable any more."
 }

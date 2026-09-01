@@ -27,8 +27,10 @@ Item {
   // the foreground, and on an all-black-text theme all three levels collapse into one.
   readonly property color muted: Util.alpha(foreground, 0.66)
   readonly property color veryMuted: Util.alpha(foreground, 0.45)
-  // Effort only on oh-my-openagent rows: opencode.json wants a bare model string there
-  // and refuses to start when it finds an object, so the control is absent, not ignored.
+  // Effort only on oh-my-openagent rows — but not because opencode refuses one. It
+  // takes `variant` inside an agent object and ignores keys it does not know; a bare
+  // string is the shape it rejects. The efforts in the catalogue are oh-my-openagent's
+  // vocabulary, so until they are checked against opencode's own the control is absent.
   readonly property var variants: (row && row.file === "ohmy")
     ? Catalog.variantsFor(root.catalogIndex, row.model) : []
   readonly property bool pickerOpen: picker.popupOpen || variantPicker.popupOpen
