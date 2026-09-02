@@ -94,6 +94,32 @@ printf '{"$schema":"https://opencode.ai/config.json","mcp":{"ctx7":{"type":"loca
 C=$(run "$D" capture "Bare" bare)
 is "capture succeeds"            "$(jq -r .ok <<<"$C")" "true"
 
+echo "=== omo 4.19 fields: reasoning is a real field, models is not ==="
+D=$(mk fields yes)
+printf '{"$schema":"https://opencode.ai/config.json","plugin":["oh-my-openagent@latest"]}' > "$D/cfg/opencode.json"
+cp "$REPO/test/fixtures/omo.jsonc" "$D/omo/omo.jsonc"
+
+OC_PROFILE_JSON='{"id":"eff","name":"Eff","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{"oracle":{"model":"anthropic/claude-opus-5","reasoning":"high"}},"categories":{}}}]}' \
+  run "$D" save >/dev/null
+E=$(run "$D" apply eff)
+is "reasoning is accepted"       "$(jq -r .ok <<<"$E")" "true"
+is "and it reaches the file"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.reasoning')" "high"
+
+# The shape oh-my-openagent's own 4.19 migration writes, and the one its schema then
+# has no field for: every agent it touches loses its pin at startup.
+OC_PROFILE_JSON='{"id":"mods","name":"Mods","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{"oracle":{"models":[{"model":"anthropic/claude-opus-5"}]}},"categories":{}}}]}' \
+  run "$D" save >/dev/null
+M=$(run "$D" apply mods)
+is "models is refused"           "$(jq -r .code <<<"$M")" "E_FIELD_4X"
+is "the file was left alone"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.reasoning')" "high"
+
+echo "=== the [opencode] block never gets a file-level fallback_models ==="
+OC_PROFILE_JSON='{"id":"fb","name":"Fb","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories","fallback_models"],"payload":{"agents":{},"categories":{},"fallback_models":[{"model":"google/gemini-3-flash-preview"}]}}]}' \
+  run "$D" save >/dev/null
+F=$(run "$D" apply fb)
+is "apply still succeeds"        "$(jq -r .ok <<<"$F")" "true"
+is "but the key is not written"  "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.fallback_models // "absent"')" "absent"
+
 echo
 [ "$fail" -eq 0 ] && echo "$pass passed" || echo "FAILED $fail / $pass passed"
 exit $([ "$fail" -eq 0 ] && echo 0 || echo 1)

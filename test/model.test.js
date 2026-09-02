@@ -135,5 +135,51 @@ t("a roster the probe could not read is not a change", () => {
   assert.strictEqual(M.setRoster(null), false);
 });
 
+console.log("\n--- oh-my-openagent 4.19: `reasoning` is the current spelling of `variant` ---");
+
+const omoEffort = () => ({ id: "o", name: "O", targets: [
+  { file: "ohmy", shape: "oh-my-openagent", manages: ["agents","categories"],
+    payload: { agents: {
+      oracle: { model: "anthropic/claude-opus-5", reasoning: "high" },
+      metis:  { model: "anthropic/claude-opus-5", variant: "max" },
+      momus:  { model: "anthropic/claude-opus-5" },
+      atlas:  { model: "anthropic/claude-opus-5", reasoning: "high", variant: "low" } },
+      categories: {} } } ] });
+const omoRow = (p, key) => M.rowsFor(p).find(r => r.file === "ohmy" && r.key === key);
+
+t("an entry the plugin migrated to `reasoning` still reads back its effort", () => {
+  const p = omoEffort();
+  eq(omoRow(p, "oracle").variant, "high");
+  eq(omoRow(p, "metis").variant, "max");
+});
+t("`reasoning` is written back as `reasoning`, not duplicated as `variant`", () => {
+  let p = omoEffort();
+  p = M.setRowVariant(p, omoRow(p, "oracle"), "max");
+  eq(p.targets[0].payload.agents.oracle, { model: "anthropic/claude-opus-5", reasoning: "max" });
+});
+t("an entry that never chose a spelling gets `variant`, which every 4.x reads", () => {
+  let p = omoEffort();
+  p = M.setRowVariant(p, omoRow(p, "momus"), "high");
+  eq(p.targets[0].payload.agents.momus, { model: "anthropic/claude-opus-5", variant: "high" });
+});
+t("an entry carrying both spellings keeps the one the plugin keeps", () => {
+  let p = omoEffort();
+  eq(omoRow(p, "atlas").variant, "high");
+  p = M.setRowVariant(p, omoRow(p, "atlas"), "max");
+  eq(p.targets[0].payload.agents.atlas, { model: "anthropic/claude-opus-5", reasoning: "max" });
+});
+t("clearing an effort removes both spellings", () => {
+  let p = omoEffort();
+  p = M.setRowVariant(p, omoRow(p, "atlas"), "");
+  eq(p.targets[0].payload.agents.atlas, "anthropic/claude-opus-5");
+});
+t("a fallback follows the spelling its own entry uses", () => {
+  let p = omoEffort();
+  p = M.setRowFallbacks(p, omoRow(p, "oracle"), [{ model: "google/gemini-3.1-pro-preview", variant: "high" }]);
+  eq(p.targets[0].payload.agents.oracle.fallback_models, [{ model: "google/gemini-3.1-pro-preview", reasoning: "high" }]);
+  p = M.setRowFallbacks(p, omoRow(p, "metis"), [{ model: "google/gemini-3.1-pro-preview", variant: "high" }]);
+  eq(p.targets[0].payload.agents.metis.fallback_models, [{ model: "google/gemini-3.1-pro-preview", variant: "high" }]);
+});
+
 console.log("\n" + (fail ? "FAILED " + fail + " / " : "") + pass + " passed");
 process.exit(fail ? 1 : 0);

@@ -14,7 +14,7 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
-VERSION="1.1.0"
+VERSION="1.1.1"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -59,12 +59,28 @@ esac
 
 # The keys each shape lets a profile own. Nothing outside these lists is ever
 # assigned, deleted, or reordered.
+# `fallback_models` is a top-level key on the legacy oh-my-openagent.json only. The
+# unified config's `[opencode]` block has no such field, and writing it there costs the
+# plugin its startup: `doctor` reports
+# `Unknown config key: fallback_models / Affects: plugin startup`.
+# Per-agent and per-category `fallback_models` stay legal in both — this is the
+# file-level key, which is a different thing that happens to share a name.
 OHMY_KEYS='["agents","categories","fallback_models"]'
+OHMY_KEYS_UNIFIED='["agents","categories"]'
 OPENCODE_KEYS='["model","small_model","agent"]'
 
-# oh-my-openagent 4.x declares additionalProperties:false on an agent entry: an unknown
-# key makes it drop the whole entry silently, unconfiguring the agent with no error.
-OHMY_FORBIDDEN_FIELDS='["reasoning","models","displayName","provider"]'
+# An oh-my-openagent agent entry is a plain zod object, so an unknown key is stripped
+# rather than rejected: the write succeeds, the config validates, and the key is simply
+# not there. `models` is the one that matters. oh-my-openagent's own 4.19 migration
+# rewrites `model` + `fallback_models` into a `models` array, but the schema behind the
+# `[opencode]` block has no `models` field, so every agent it touches loses its pin and
+# `doctor` reports `Unknown config key: agents.<name>.models / Affects: plugin startup`.
+# A profile must not write the same shape. `provider` is refused for the same reason:
+# no such field, silently dropped.
+# `reasoning` and `displayName` are NOT refused — both are real fields on an agent entry.
+# `reasoning` is the current spelling of `variant`, and is what a config migrated by
+# oh-my-openagent itself will contain.
+OHMY_FORBIDDEN_FIELDS='["models","provider"]'
 
 # ---------------------------------------------------------------- plumbing
 
@@ -479,7 +495,10 @@ file_for() {
 
 keys_for() {
   case "$1" in
-    ohmy)     printf '%s' "$OHMY_KEYS" ;;
+    ohmy)     if [ "$(scope_for ohmy)" = '[]' ]
+              then printf '%s' "$OHMY_KEYS"
+              else printf '%s' "$OHMY_KEYS_UNIFIED"
+              fi ;;
     opencode) printf '%s' "$OPENCODE_KEYS" ;;
   esac
 }

@@ -3,3 +3,5 @@
 .DS_Store
 __pycache__/
 *.pyc
+# oh-my-openagent leaves this behind wherever it runs, this repo included
+.omo/

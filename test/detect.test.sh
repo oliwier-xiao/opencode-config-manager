@@ -13,10 +13,17 @@ for d in "$REAL_CACHE"/opencode/packages/oh-my-open*@*/node_modules/oh-my-open*;
   [ -f "$d/package.json" ] && OMO_PKG="$d" && break
 done
 skip_omo(){ [ -z "$OMO_PKG" ] && { printf '  skip %s (oh-my-openagent is not installed)\n' "$1"; return 0; }; return 1; }
+# Whatever version happens to be installed. Pinning a literal here made the suite fail
+# on somebody else's machine every time oh-my-openagent shipped a release.
+OMO_VER=""
+[ -n "$OMO_PKG" ] && OMO_VER="$(jq -r '.version // empty' "$OMO_PKG/package.json" 2>/dev/null)"
 pass=0; fail=0
 ok(){ printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
 no(){ printf '  FAIL %s\n         %s\n' "$1" "$2"; fail=$((fail+1)); }
 is(){ [ "$2" = "$3" ] && ok "$1" || no "$1" "got: $2   want: $3"; }
+# The oh-my-openagent halves read a roster off the real installed package, so anything
+# counted out of it is a moving target. Assert the floor, not the number of the day.
+atleast(){ [ "$2" -ge "$3" ] 2>/dev/null && ok "$1" || no "$1" "got: $2   want: >= $3"; }
 
 mk(){ # mk <name> <omo-installed?> ; creates dirs, echoes the scenario root
   local n="$1" installed="$2"
@@ -58,13 +65,14 @@ B=$(run "$D" detect)
 is "shape is oh-my-openagent"     "$(jq -r .shape <<<"$B")"                 "oh-my-openagent"
 is "declared"                     "$(jq -r .ohMy.declaredInOpencodeJson <<<"$B")" "true"
 is "installed"                    "$(jq -r .ohMy.installed <<<"$B")"        "true"
-is "version detected"             "$(jq -r .ohMyVersion <<<"$B")"           "4.19.3"
+is "version detected"             "$(jq -r .ohMyVersion <<<"$B")"           "$OMO_VER"
 is "reads through [opencode]"     "$(jq -r '.files.ohmy.agents|length' <<<"$B")" "9"
 is "categories read"              "$(jq -r '.files.ohmy.categories|length' <<<"$B")" "8"
 is "scope reported"               "$(jq -r '.files.ohmy.scope' <<<"$B")"    "[opencode]"
 is "path is omo.jsonc"            "$(basename "$(jq -r '.files.ohmy.path' <<<"$B")")" "omo.jsonc"
-is "omo roster detected"          "$(jq -r '.roster.ohmy.agents|length' <<<"$B")" "14"
-is "omo categories detected"      "$(jq -r '.roster.ohmy.categories|length' <<<"$B")" "8"
+atleast "omo roster detected"     "$(jq -r '.roster.ohmy.agents|length' <<<"$B")" 11
+is "roster names sisyphus"        "$(jq -r '[.roster.ohmy.agents[]|select(.=="sisyphus")]|length' <<<"$B")" "1"
+atleast "omo categories detected" "$(jq -r '.roster.ohmy.categories|length' <<<"$B")" 8
 is "no E_JSONC warning"           "$(jq -r '[.warnings[]|select(.code=="E_JSONC")]|length' <<<"$B")" "0"
 
 echo "=== C. omo declared but not configured yet ==="

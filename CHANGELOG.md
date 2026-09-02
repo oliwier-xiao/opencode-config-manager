@@ -1,5 +1,43 @@
 # Changelog
 
+## 1.1.1
+
+oh-my-openagent 4.19 renamed the field an effort is written into, and its own migration
+now writes a shape its own schema has no field for. Both of those reached the panel: one
+as an effort that read back blank, the other as a config that can be written but not
+started.
+
+### Fixed
+
+- **`reasoning` is read and written.** 4.19 renamed `variant` to `reasoning`, and keeps
+  `reasoning` when an entry carries both. This plugin read only `variant`, so an entry
+  oh-my-openagent had migrated for itself showed no effort at all — and lost the one it
+  had on the next write. Either spelling is now read, and an entry is written back in
+  the spelling it already uses. A new entry still gets `variant`, which every 3.x and
+  4.x understands.
+- **`reasoning` and `displayName` are no longer refused.** Both are real fields on an
+  agent entry. The check that rejected them was written against the belief that an
+  unknown key makes oh-my-openagent drop the whole entry; the entry is a plain object,
+  an unknown key is stripped rather than rejected, and neither of these is unknown.
+- **`models` is still refused, now for the reason that is actually true.**
+  oh-my-openagent's own 4.19 migration rewrites `model` + `fallback_models` into a
+  `models` array, but the schema behind the `[opencode]` block has no `models` field, so
+  every agent that migration touches loses its pin: `doctor` reports
+  `Unknown config key: agents.<name>.models` against `Affects: plugin startup`. A
+  profile must not write the same shape.
+- **A profile no longer owns a file-level `fallback_models` inside `[opencode]`.** That
+  key belongs to the legacy `oh-my-openagent.json`; the unified config has no such
+  field, and writing it there costs the plugin its startup the same way. It stays owned
+  on the legacy path, which installs that have not migrated still read. Per-agent and
+  per-category `fallback_models` are untouched — they remain legal in both.
+
+### Changed
+
+- The detection suite no longer pins oh-my-openagent's version. It reads a roster off
+  whatever package is installed, so a literal `4.19.3` in an assertion turned every
+  oh-my-openagent release into a failing test run. Counts taken from that package are
+  floors now, not exact numbers.
+
 ## 1.1.0
 
 The oh-my-openagent half of this plugin was editing a file oh-my-openagent no longer
