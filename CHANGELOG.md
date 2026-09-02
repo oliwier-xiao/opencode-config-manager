@@ -1,5 +1,23 @@
 # Changelog
 
+## 1.1.2
+
+A config this plugin wrote could be refused by the software it was written for.
+
+### Fixed
+
+- **oh-my-openagent entries are always written as objects.** `doctor` since 4.19
+  validates `agents.*` and `categories.*` under `[opencode]` with
+  `AgentOverrideConfigSchema`, which has no string branch. This plugin kept the
+  short string form (`"sisyphus": "provider/model"`) for any entry that carried
+  only a model, so a profile that pinned three agents with no effort wrote three
+  bare strings. `doctor` then refused each with `Invalid input: expected object,
+  received string` and `Affects: plugin startup`, and openCode showed
+  `config invalid — run doctor` in the bar. The short form is now kept only for
+  `opencode.json` `model`/`small_model`; every oh-my-openagent row is written as
+  `{ model }`, and clearing an effort leaves `{ model }` rather than collapsing
+  back to a string.
+
 ## 1.1.1
 
 oh-my-openagent 4.19 renamed the field an effort is written into, and its own migration

@@ -65,11 +65,11 @@ t("a user-defined subagent keeps its non-model fields", () => {
   const out = M.setAllModels(ocProfile(), "anthropic/claude-opus-5", () => "");
   assert.strictEqual(out.targets[0].payload.agent["my-reviewer"].mode, "subagent");
 });
-t("oh-my-openagent rows keep the short string form", () => {
+t("oh-my-openagent rows are always objects (4.19+ requires object, not string)", () => {
   const p = omProfile();
   const row = M.rowsFor(p).find(r => r.file === "ohmy" && r.key === "sisyphus");
   const out = M.setRowModel(p, row, "anthropic/claude-opus-5");
-  assert.strictEqual(out.targets[0].payload.agents.sisyphus, "anthropic/claude-opus-5");
+  eq(out.targets[0].payload.agents.sisyphus, { model: "anthropic/claude-opus-5" });
 });
 
 
@@ -175,10 +175,10 @@ t("an entry carrying both spellings keeps the one the plugin keeps", () => {
   p = M.setRowVariant(p, omoRow(p, "atlas"), "max");
   eq(p.targets[0].payload.agents.atlas, { model: "anthropic/claude-opus-5", reasoning: "max" });
 });
-t("clearing an effort removes both spellings", () => {
+t("clearing an effort removes both spellings but keeps object form (ohmy requires object)", () => {
   let p = omoEffort();
   p = M.setRowVariant(p, omoRow(p, "atlas"), "");
-  eq(p.targets[0].payload.agents.atlas, "anthropic/claude-opus-5");
+  eq(p.targets[0].payload.agents.atlas, { model: "anthropic/claude-opus-5" });
 });
 t("a fallback follows the spelling its own entry uses", () => {
   let p = omoEffort();
