@@ -157,8 +157,15 @@ t("`reasoning` is written back as `reasoning`, not duplicated as `variant`", () 
   p = M.setRowVariant(p, omoRow(p, "oracle"), "max");
   eq(p.targets[0].payload.agents.oracle, { model: "anthropic/claude-opus-5", reasoning: "max" });
 });
-t("an entry that never chose a spelling gets `variant`, which every 4.x reads", () => {
+t("an entry with no spelling follows the file it is in", () => {
   let p = omoEffort();
+  p = M.setRowVariant(p, omoRow(p, "momus"), "high");
+  eq(p.targets[0].payload.agents.momus, { model: "anthropic/claude-opus-5", reasoning: "high" });
+});
+t("a file that has never seen `reasoning` gets `variant`, which every 3.x and 4.x reads", () => {
+  let p = { id: "o", name: "O", targets: [
+    { file: "ohmy", shape: "oh-my-openagent", manages: ["agents","categories"],
+      payload: { agents: { momus: { model: "anthropic/claude-opus-5" } }, categories: {} } } ] };
   p = M.setRowVariant(p, omoRow(p, "momus"), "high");
   eq(p.targets[0].payload.agents.momus, { model: "anthropic/claude-opus-5", variant: "high" });
 });

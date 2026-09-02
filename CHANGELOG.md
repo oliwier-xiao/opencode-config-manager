@@ -13,8 +13,7 @@ started.
   `reasoning` when an entry carries both. This plugin read only `variant`, so an entry
   oh-my-openagent had migrated for itself showed no effort at all — and lost the one it
   had on the next write. Either spelling is now read, and an entry is written back in
-  the spelling it already uses. A new entry still gets `variant`, which every 3.x and
-  4.x understands.
+  the spelling it already uses.
 - **`reasoning` and `displayName` are no longer refused.** Both are real fields on an
   agent entry. The check that rejected them was written against the belief that an
   unknown key makes oh-my-openagent drop the whole entry; the entry is a plain object,
@@ -30,6 +29,19 @@ started.
   field, and writing it there costs the plugin its startup the same way. It stays owned
   on the legacy path, which installs that have not migrated still read. Per-agent and
   per-category `fallback_models` are untouched — they remain legal in both.
+
+### Compatibility
+
+No version floor, and nothing to upgrade. `variant` is still a field in 4.19, so a config
+this plugin writes is read by every 3.x and 4.x alike, and there is no version check
+anywhere in this change.
+
+Which spelling a *new* entry gets is decided by the file, not by a version number:
+oh-my-openagent migrates a whole config in one pass, so a single entry already carrying
+`reasoning` is proof the install that wrote it uses the new name, and the rest of the
+file follows suit. A file that has never seen `reasoning` keeps getting `variant`. That
+holds on both sides of the rename — including the release where `variant` finally goes
+away, since by then the config will have been migrated and the file will say so itself.
 
 ### Changed
 

@@ -179,3 +179,40 @@ was merged upstream but has never shipped on 4.x —
 
 The panel reads whatever is in the file, so once it is repaired the agents show their real models
 again.
+
+## oh-my-openagent disabled itself over duplicate plugin entries
+
+Also not this plugin's. The banner is oh-my-openagent's own, and it appears at startup:
+
+```
+[oh-my-openagent] Duplicate OMO plugin entries detected:
+   - oh-my-openagent
+   - oh-my-openagent@latest
+
+   oh-my-openagent startup has been disabled for this plugin instance.
+```
+
+Two entries that resolve to the *same installed version* still count as two — the check compares
+the strings you wrote, not what they resolve to. So `oh-my-openagent` and `oh-my-openagent@latest`
+are a duplicate pair, and the plugin turns itself off rather than risk two instances writing into
+one session.
+
+The reason it is hard to find is that the second entry is usually not in the file you are looking
+at. opencode collects `.opencode/opencode.json` from every directory on the way up from where you
+started it, and **concatenates** the `plugin` arrays it finds. A `~/.opencode/opencode.json` is on
+that path from every directory under your home, so one stray entry there disables the plugin
+everywhere at once. That file is easy to acquire without meaning to: the `curl | bash` installer
+creates `~/.opencode/`, and running a plugin installer while sitting in your home directory writes
+the entry there rather than into your real config.
+
+Check both, and keep exactly one entry between them:
+
+```bash
+jq '.plugin' ~/.config/opencode/opencode.json
+jq '.plugin' ~/.opencode/opencode.json        # usually the culprit
+```
+
+`~/.config/opencode/tui.json` is **not** part of this. oh-my-openagent registers its TUI half
+there separately, the duplicate check does not read that file, and removing its entry costs you
+the `Roles · Models` sidebar and the TUI-only commands — `doctor` reports it as
+`TUI plugin entry missing from tui.json`. Leave it alone.
