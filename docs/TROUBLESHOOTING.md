@@ -1,0 +1,218 @@
+# Troubleshooting
+
+## "The response was blocked by the provider's content filter"
+
+You switch a profile to a Claude model, send a message, and after half a minute of apparent work
+the turn ends with a red box and no answer:
+
+```
+The response was blocked by the provider's content filter
+▣  Sisyphus - Ultraworker · Claude Fable 5 · 55.8s
+```
+
+Then the next message fails the same way. And the one after that, even if it is one harmless word.
+
+This is not the widget, and it is not your config. It is worth writing down anyway, because the
+message names neither the provider nor the reason, and the obvious readings of it are all wrong.
+
+### What it actually means
+
+opencode raises this whenever a turn finishes with the reason `content-filter`. On the **anthropic**
+provider exactly one thing produces that value — the API answered `HTTP 200` with
+`stop_reason: "refusal"`:
+
+```js
+if (reason === "end_turn" || reason === "stop_sequence") return "stop"
+if (reason === "max_tokens")                            return "length"
+if (reason === "tool_use")                              return "tool-calls"
+if (reason === "refusal")                               return "content-filter"
+```
+
+So a refusal is a *successful response*, not an error. Anthropic's streaming classifiers stopped the
+model mid-generation and threw away what it had written. That is why the timer shows 30–60 seconds:
+the model really was working, and you are billed for the part that streamed before the refusal.
+
+The response carries a `stop_details.category` saying which policy area fired:
+
+| category | what it means |
+|---|---|
+| `cyber` | could enable cyber harm. **Benign security work also triggers this.** |
+| `bio` | could enable biological harm. Beneficial life-sciences work also triggers it. |
+| `frontier_llm` | could assist development of competing AI models |
+| `reasoning_extraction` | asks the model to reproduce its internal reasoning as output text |
+| `general_harms` | a policy area not named above. Benign work sometimes triggers it. |
+
+opencode does not surface that category today, which is why the box tells you nothing. That is a
+known upstream gap — [opencode#34835](https://github.com/anomalyco/opencode/issues/34835).
+
+### Why the *next* message fails too
+
+Because the refused turn is still in the conversation. Anthropic is explicit about this:
+
+> When you receive `stop_reason: refusal`, you **must reset the conversation context** before
+> continuing. […] Attempting to continue without resetting will result in continued refusals.
+
+opencode does not reset anything — it marks the turn as failed and moves on, leaving the refused
+exchange in the history, which the next request sends straight back. The one-word follow-up is not
+being judged on its own merits; the whole thread is. **A new turn in the same session is not a
+reset. You need a new session.**
+
+### Why it looks like the model's fault
+
+Often it is. Anthropic ships classifiers on some models that decline more readily than others, and
+their own guidance for a refusal is to *send the same request to a different Claude model*. So if
+one model refuses a prompt and another answers it, that is the documented behaviour rather than
+evidence that something is broken locally.
+
+Reported in the wild on a benign frontend task, with **no plugins at all**, by a user on an
+OpenCode Zen subscription — [opencode#32029](https://github.com/anomalyco/opencode/issues/32029),
+closed with:
+
+> the content filters aren't enforced by us so we cant do anything about that, they can be
+> encountered regardless of where model is hosted: vertex, bedrock, anthropic direct
+
+### Careful: the same box, a different cause
+
+The message is hardcoded once in opencode, but several providers map onto it, so it is **not** proof
+that a refusal happened. On `google-vertex`, three unrelated failures are indistinguishable
+([opencode#35736](https://github.com/anomalyco/opencode/issues/35736)):
+
+| what really happened | what you see |
+|---|---|
+| `HTTP 404 NOT_FOUND` — model not served in that region | "blocked by the provider's content filter" |
+| dropped socket / connection reset | the same |
+| a genuine `stop_reason: refusal` | the same |
+
+Gemini maps its `SAFETY`, `RECITATION`, `PROHIBITED_CONTENT` and `SPII` reasons onto it too. So
+before concluding anything, find out which provider actually served the turn:
+
+```bash
+grep -o '"anthropic":{"type":"[a-z]*"' ~/.local/share/opencode/auth.json
+```
+
+`oauth` or `api` means you are talking to Anthropic directly and a refusal is the only explanation.
+No match means the model came from somewhere else — a relay, Zen, Bedrock or Vertex — and the box
+may be standing in for a 404 or a dead connection.
+
+### What to do
+
+1. **Start a new session.** Not a new message — a new session. This is the step Anthropic requires,
+   and it is the one that explains why everything after the first refusal also fails.
+2. **Switch the profile to another Claude model.** This is Anthropic's own recommended recovery, not
+   a workaround. If it succeeds, the refusal was model-specific and nothing local is at fault.
+3. **Let Anthropic retry for you.** Setting `fallbacks` makes the API re-run a declined request on
+   another model server-side and hand you a normal answer, so the red box never reaches you:
+
+   ```json
+   {
+     "provider": {
+       "anthropic": {
+         "options": { "fallbacks": "default" }
+       }
+     }
+   }
+   ```
+
+   opencode adds the required beta header itself when it sees `"default"`. Two caveats: Anthropic
+   documents this as beta on the Claude API, so it is untested against subscription OAuth
+   credentials, and for a refusal category with no recommended fallback the refusal still stands.
+
+A profile switch will not disturb any of this. This widget claims only `model`, `small_model` and
+`agent` (`bin/oc-profiles`), so a `provider` block you add by hand comes back untouched after every
+switch — the same guarantee described in [Switching, safely](../README.md#switching-safely).
+
+### What it is not
+
+- **Not running out of tokens, context or reasoning effort.** Those finish as `max_tokens` or
+  `model_context_window_exceeded`, both of which map to `length`, never to `content-filter`.
+- **Not a crash or a malformed request.** A bad request comes back as an HTTP 400 and never reaches
+  the code that produces this message.
+- **Not necessarily caused by a plugin.** An auth or agent plugin can change *what the classifier
+  reads* — several rewrite the system prompt before it is sent — but the same failure is reported
+  with no plugins installed. Check the provider first, then bisect plugins, in that order.
+
+### Related
+
+- [Handle streaming refusals](https://platform.claude.com/docs/en/test-and-evaluate/strengthen-guardrails/handle-streaming-refusals) — the context-reset requirement
+- [Refusals and fallback](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback) — categories, response shape, server-side fallback
+- [opencode#35475](https://github.com/anomalyco/opencode/issues/35475) — a false positive, billed for output nobody received
+
+---
+
+## Your oh-my-openagent agents run a model you did not choose
+
+Nothing to do with this plugin — this one is oh-my-openagent's, and it bites after an upgrade to
+4.x whether or not you use the panel.
+
+Its `2026-08-reasoning-unification` migration rewrites every agent to a plural `models` array and
+deletes the `model`, `reasoning` and `fallback_models` keys. But the schema oh-my-openagent itself
+reads accepts only the singular keys and has no `models` at all. It is a non-strict schema, so the
+key is not rejected loudly — it is **stripped**, and every agent reaches the runtime with an empty
+config and falls through to a built-in default chain.
+
+The result is silent. Your pins are gone, agents run on whatever the default resolves to, and
+nothing says so. Check with:
+
+```bash
+omo doctor
+```
+
+`Unknown config key: agents.<name>.models` is the symptom. Repair it by turning each agent's
+`models` array back into the singular form — the first entry becomes `model` plus `reasoning`, the
+rest become `fallback_models`:
+
+```jsonc
+"sisyphus": {
+  "model": "anthropic/claude-opus-5",
+  "reasoning": "max",
+  "fallback_models": [{ "model": "google/gemini-3.1-pro-preview", "reasoning": "high" }]
+}
+```
+
+Leave `categories` alone — there `models` is correct and is genuinely read, which is why the
+doctor never complains about them.
+
+Do not run `oh-my-openagent config migrate` to fix this, and ignore the doctor's own hint to swap
+`fallback_models` back for `models`: both restore the shape the runtime cannot read. The real fix
+was merged upstream but has never shipped on 4.x —
+[#7521](https://github.com/code-yeongyu/oh-my-openagent/issues/7521).
+
+The panel reads whatever is in the file, so once it is repaired the agents show their real models
+again.
+
+## oh-my-openagent disabled itself over duplicate plugin entries
+
+Also not this plugin's. The banner is oh-my-openagent's own, and it appears at startup:
+
+```
+[oh-my-openagent] Duplicate OMO plugin entries detected:
+   - oh-my-openagent
+   - oh-my-openagent@latest
+
+   oh-my-openagent startup has been disabled for this plugin instance.
+```
+
+Two entries that resolve to the *same installed version* still count as two — the check compares
+the strings you wrote, not what they resolve to. So `oh-my-openagent` and `oh-my-openagent@latest`
+are a duplicate pair, and the plugin turns itself off rather than risk two instances writing into
+one session.
+
+The reason it is hard to find is that the second entry is usually not in the file you are looking
+at. opencode collects `.opencode/opencode.json` from every directory on the way up from where you
+started it, and **concatenates** the `plugin` arrays it finds. A `~/.opencode/opencode.json` is on
+that path from every directory under your home, so one stray entry there disables the plugin
+everywhere at once. That file is easy to acquire without meaning to: the `curl | bash` installer
+creates `~/.opencode/`, and running a plugin installer while sitting in your home directory writes
+the entry there rather than into your real config.
+
+Check both, and keep exactly one entry between them:
+
+```bash
+jq '.plugin' ~/.config/opencode/opencode.json
+jq '.plugin' ~/.opencode/opencode.json        # usually the culprit
+```
+
+`~/.config/opencode/tui.json` is **not** part of this. oh-my-openagent registers its TUI half
+there separately, the duplicate check does not read that file, and removing its entry costs you
+the `Roles · Models` sidebar and the TUI-only commands — `doctor` reports it as
+`TUI plugin entry missing from tui.json`. Leave it alone.

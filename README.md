@@ -123,7 +123,10 @@ costs per million tokens:
 ![Editing a profile, plain opencode](docs/plain-editor.png)
 
 Effort works on agent rows in both shapes — opencode's own agent entries carry a `variant` just as
-oh-my-openagent's do. The two rows it is disabled on are **Default model** and **Small model**:
+oh-my-openagent's do. oh-my-openagent 4.19 renamed its own to `reasoning`; both spellings are read,
+and an entry is written back in the one it already uses, so a config that version migrated for
+itself keeps its effort either way. The two rows it is disabled on are **Default model** and
+**Small model**:
 those are bare model strings with nowhere to put one. The control stays visible rather than
 vanishing, so the rows keep lining up.
 
@@ -219,6 +222,13 @@ else gets a neutral mark — the provider is written into every model id anyway.
 - <kbd>Tab</kbd> switch between "models you can use" and "every model there is"
 - Type a `provider/model` id that is not in the list and it will still let you use it
 
+Picking a model is also where this plugin stops and the provider begins. If a model answers with
+**"The response was blocked by the provider's content filter"** — and keeps doing it, even for one
+harmless word — that is coming from the provider, not from anything written here.
+[Troubleshooting](docs/TROUBLESHOOTING.md) explains what the message means, why the message after it
+fails too, and what to change. It also covers an oh-my-openagent migration bug that quietly drops
+the model you pinned to an agent.
+
 ---
 
 ## Switching, safely
@@ -309,7 +319,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | `afterSwitch` | Notify | see **Reloading opencode** above |
 | `confirmSwitch` | off | ask before switching. Off is the fast path the bar is for |
 | `manageOpencodeJson` | on | manage `model`, `small_model` and `agent` in `opencode.json` |
-| `manageOhMyOpenAgent` | on | manage `agents`, `categories` and `fallback_models` in `~/.omo/omo.jsonc`. Off forces the plain-opencode view |
+| `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — plus a file-level `fallback_models` on the legacy `oh-my-openagent.json`, where that key still exists. Off forces the plain-opencode view |
 | `keepBackups` | 10 | copies kept of each config file, oldest deleted past this. The one Undo needs is never pruned |
 | `catalogRefreshHours` | 24 | how often the model list is rebuilt |
 | `showModelMeta` | on | show context window and price on every model row |
