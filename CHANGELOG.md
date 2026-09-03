@@ -46,6 +46,19 @@ migration writes — and repairs it in one click.
   plugin should make; the store-only repair deliberately stays out of Undo's reach,
   because its backup holds no config to put back.
 
+### Hardened
+
+- **What `doctor` hands the shell is bounded at both ends.** `detect`, `list` and
+  `backups` each cap what they print with `MAX_EMIT_BYTES`; the two commands added
+  here did not. Both build their rows out of profile and agent names read from files
+  anything running as this user can write, and both counts grow with those files
+  rather than with anything this plugin decides — so a store carrying a hundred broken
+  profiles got to choose how much omarchy-shell buffered, and how many rows were drawn
+  above the profile list. The count is capped first and the bytes after it, at the end
+  they come out of. What is left over is reported rather than dropped: `doctor` appends
+  a `W_MORE` row, a dry run answers `omitted`. The repair itself is uncapped — that one
+  writes a file, not the panel.
+
 ### Notes
 
 `variant` is reported and never rewritten. It is the old spelling of `reasoning`, both
