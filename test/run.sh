@@ -20,6 +20,7 @@ for suite in "bash $REPO/test/safe-read.test.sh" \
              "bash $REPO/test/detect.test.sh" \
              "bash $REPO/test/write.test.sh" \
              "bash $REPO/test/sync.test.sh" \
+             "bash $REPO/test/qml.test.sh" \
              "bash $REPO/test/match.test.sh"; do
   printf '\n=== %s\n' "${suite##*/}"
   $suite || rc=1

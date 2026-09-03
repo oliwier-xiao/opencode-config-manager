@@ -277,11 +277,13 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-216 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+227 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
-a machine that does not have it installed.
+a machine that does not have it installed, and so does the QML suite where there is no Qt6
+`qml` to run it — that one splices functions straight out of the `.qml` files and executes
+them in a real QML engine, because the writers being right says nothing about the call sites.
 
 `./dev-sync.sh` copies the working tree into `~/.config/omarchy/plugins/` and restarts the
 shell — a bar widget already mounted in a slot keeps its old instance otherwise, so a

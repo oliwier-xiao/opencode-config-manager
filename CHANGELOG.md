@@ -72,6 +72,9 @@ listing them, until the cache was deleted by hand.
   the 4.19 actually loaded — and could not match the unsuffixed directory at all.
 - **Staged files from a killed run are swept.** Every glob was scoped to the run
   that made it, so nothing ever removed them.
+- **The IPC block in the README named a command that does not exist.** `omarchy-shell
+  ipc call <target> <method>` answered "Target not found" for all three; the wrapper
+  takes `<target> <method>`.
 
 ## 1.1.2
 
