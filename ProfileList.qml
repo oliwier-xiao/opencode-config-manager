@@ -103,9 +103,10 @@ Item {
     return issue ? String(issue.detail || issue.code || "") : ""
   }
 
-  // Is anything actually broken, or is this only things worth knowing? The two
-  // read differently on purpose: a config that will not do what it says earns
-  // the urgent colour, and a note about a spelling that still works does not.
+  // Is anything actually broken, or is this only things worth knowing? It decides
+  // both whether the strip exists at all and what colour it takes: a config that
+  // will not do what it says earns the urgent one, and a note about a spelling
+  // that still works never earns a row of its own.
   readonly property bool healthBroken: {
     var list = root.healthIssues || []
     for (var i = 0; i < list.length; i++) if (list[i] && list[i].fixable === true) return true
@@ -345,13 +346,17 @@ Item {
       }
     }
 
-    // Health: one compact strip above PROFILES, hidden when there is nothing to
-    // fix. Warnings (W_LEGACY_OHMY, W_OUTDATED_OMO, W_VARIANT_DEPRECATED) carry
-    // fixable !== true and draw as info with no button. Never touches `ready` or
-    // `detected`, so it cannot disturb the first-paint gating above.
+    // Health: one compact strip above PROFILES, and only something repairable
+    // ever summons it. The warnings — W_VARIANT_DEPRECATED above all — are true
+    // of a config that works and stay true for as long as it does, so on their
+    // own they would be a permanent box in everybody's panel whose whole content
+    // is "nothing is broken". They ride along as context once a real problem has
+    // opened the strip, and are otherwise left to `oc-profiles doctor`.
+    // Never touches `ready` or `detected`, so it cannot disturb the first-paint
+    // gating above.
     Loader {
       width: parent.width
-      active: (root.healthIssues || []).length > 0
+      active: root.healthBroken
       visible: active
       height: active ? implicitHeight : 0
       sourceComponent: healthStrip

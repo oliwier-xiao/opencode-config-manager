@@ -264,8 +264,13 @@ So the panel checks, on every open, and shows what it found — and only then:
 ![The Health strip](docs/health.png)
 
 Each line is one problem, in the words of what actually happened rather than a code. **Fix** is
-there when there is a repair to run, and absent when there is only something worth knowing. A
-config with nothing wrong with it draws no strip at all.
+there when there is a repair to run.
+
+Only something repairable brings the strip up. The two warnings below are true of a config that
+works and stay true for as long as it does, so on their own they would be a permanent box whose
+whole content is "nothing is broken" — they come along as context once a real problem has opened
+it, and are otherwise left to `oc-profiles doctor`. A config with nothing wrong with it draws
+no strip at all.
 
 | | |
 |---|---|

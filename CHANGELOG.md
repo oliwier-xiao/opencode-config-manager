@@ -8,12 +8,16 @@ migration writes — and repairs it in one click.
 
 ### Added
 
-- **A Health strip, and `oc-profiles doctor`.** Read on every panel open, drawn only
-  when something is wrong: a config with nothing to say about it takes no height at
-  all. Each line is what happened rather than a code, and carries a **Fix** only where
-  there is a repair to run. Anything that merely wants knowing draws in the quiet
-  colours the notices already use — an "you are a release behind" painted like a broken
-  config teaches people to stop reading the colour.
+- **A Health strip, and `oc-profiles doctor`.** Read on every panel open, and brought
+  up by something repairable — never by a warning alone. `variant` rather than
+  `reasoning` is true of a config that works and stays true for as long as it does, so
+  a strip it could summon by itself is a permanent box in everybody's panel whose whole
+  content is "nothing is broken". The warnings come along as context once a real problem
+  has opened the strip, and are otherwise left to the command. Each line is what
+  happened rather than a code, and carries a **Fix** only where there is a repair to
+  run; the ones that merely want knowing draw in the quiet colours the notices already
+  use, because a "you are a release behind" painted like a broken config teaches people
+  to stop reading the colour.
 - **`oc-profiles repair --fix CODE [--profile ID] [--apply]`.** A dry run by default,
   printing what it would change and touching nothing. `--apply` copies the file first,
   writes through the same splice a switch uses, reads the result back, and puts the
