@@ -259,8 +259,11 @@ each agent's `model` and `fallback_models` into a `models` array — and the sch
 pinned. The file validates. The plugin starts. The agent quietly runs on a default, and nothing
 says so.
 
-So the panel checks, on every open, and shows what it found — and only then. Each line is one
-problem, in the words of what actually happened rather than a code. **Fix** is
+So the panel checks, on every open, and shows what it found — and only then:
+
+![The Health strip](docs/health.png)
+
+Each line is one problem, in the words of what actually happened rather than a code. **Fix** is
 there when there is a repair to run, and absent when there is only something worth knowing. A
 config with nothing wrong with it draws no strip at all.
 
