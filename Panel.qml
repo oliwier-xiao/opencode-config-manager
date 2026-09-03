@@ -75,6 +75,11 @@ Panel {
   property var catalog: Catalog.empty()
   property var catalogIndex: ({})
   property bool catalogSyncTried: false
+  // An `r` pressed while a background sync is already in flight. It cannot be
+  // handed to that run — Quickshell fixes a Process's environment at spawn, so
+  // its FORCE is already 0 — and dropping it is what made the panel-open sync
+  // eat every refresh pressed in the seconds after opening the bar.
+  property bool forcePending: false
   property bool busy: false
   property bool loaded: false
 
@@ -196,9 +201,13 @@ Panel {
   function refresh() {
     // An explicit refresh means "I just added a provider", so it goes past the
     // TTL rather than being told the cache is still young.
-    catalogSync.force = true
     root.catalogSyncTried = false
-    if (!catalogSync.running) catalogSync.running = true
+    if (catalogSync.running) {
+      root.forcePending = true
+    } else {
+      catalogSync.force = true
+      catalogSync.running = true
+    }
     reload()
   }
 
@@ -933,15 +942,29 @@ Panel {
     command: [root.pluginDir + "/bin/sync-models.sh"]
     environment: ({
       "TTL": String(root.catalogRefreshHours * 3600),
-      "FORCE": catalogSync.force ? "1" : "0"
+      "FORCE": catalogSync.force ? "1" : "0",
+      // The reachable list is built by running `opencode models`, and which models
+      // that names depends on the config folder. Every other process this panel
+      // starts is told which one; leaving this one out built the picker from a
+      // different opencode than the one the profile is written for.
+      "OPENCODE_CONFIG_DIR": root.configDir
     })
     stdout: StdioCollector {
       waitForEnd: true
       onStreamFinished: {
         // One status word is all this prints; anything longer is not from us.
-        catalogSync.force = false
         if (Model.withinLimit(text, 4096)) root.loadCatalog()
       }
+    }
+    // Honoured here rather than in refresh(), because a Process that is already
+    // running cannot be told anything: its environment was read at spawn. The
+    // refresh the user asked for runs now, as the forced run it was meant to be.
+    onExited: {
+      catalogSync.force = false
+      if (!root.forcePending) return
+      root.forcePending = false
+      catalogSync.force = true
+      catalogSync.running = true
     }
   }
 
@@ -1013,11 +1036,15 @@ Panel {
   // the bar and seeing the list — the cached list paints first, and the sync
   // re-reads the cache when it lands.
   Timer {
-    interval: root.catalogRefreshHours * 3600 * 1000
+    // Clamped to what a Qt interval can hold. The settings slider goes to 720
+    // hours, which is 2.59e9 milliseconds — past a signed 32-bit int, where it
+    // wraps negative, never fires, and leaves the timer restarting itself a few
+    // hundred times a second into the shell log.
+    interval: Math.min(2147483647, root.catalogRefreshHours * 3600 * 1000)
     running: true
     repeat: true
     triggeredOnStart: false
-    onTriggered: catalogSync.running = true
+    onTriggered: if (!catalogSync.running) catalogSync.running = true
   }
 
   // ConfirmDialog's message and the bar tooltip are shell components that do
