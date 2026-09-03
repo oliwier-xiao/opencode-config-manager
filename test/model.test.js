@@ -236,5 +236,29 @@ t("an oh-my-openagent row still steps down, as it always did", () => {
          "effort survived: " + JSON.stringify(e));
 });
 
+console.log("\n--- a profile takes the colour of the provider it is mostly on ---");
+const PAL = require(require("path").join(__dirname, "load-model.js"))(require("path").join(REPO, "lib/Palette.js"));
+const rowsOf = (...m) => m.map(x => ({ model: x }));
+t("a profile on one provider claims it", () => {
+  eq(PAL.dominantProvider(rowsOf("opencode/a","opencode/b","opencode/c")), "opencode");
+});
+t("a majority is enough", () => {
+  eq(PAL.dominantProvider(rowsOf("openrouter/a","openrouter/b","opencode/c")), "openrouter");
+});
+t("exactly half is enough", () => {
+  eq(PAL.dominantProvider(rowsOf("openrouter/a","openrouter/b","opencode/c","google/d")), "openrouter");
+});
+t("an even spread claims nothing", () => {
+  eq(PAL.dominantProvider(rowsOf("a/1","b/1","c/1")), "");
+});
+t("unpinned rows are not counted", () => {
+  eq(PAL.dominantProvider(rowsOf("opencode/a", null, undefined, "")), "opencode");
+});
+t("nothing pinned, nothing claimed", () => {
+  eq(PAL.dominantProvider(rowsOf(null, "")), "");
+  eq(PAL.dominantProvider([]), "");
+  eq(PAL.dominantProvider(null), "");
+});
+
 console.log("\n" + (fail ? "FAILED " + fail + " / " : "") + pass + " passed");
 process.exit(fail ? 1 : 0);

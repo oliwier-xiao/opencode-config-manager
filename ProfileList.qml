@@ -447,8 +447,17 @@ Item {
         anchors.leftMargin: Style.space(2)
         width: Style.space(3)
         radius: width / 2
-        color: rowItem.isActive ? root.accent : "transparent"
-        opacity: root.drift && rowItem.isActive ? 0.45 : 1
+        // Running is still the accent, at full strength. The rest carry the tint of
+        // the provider they are mostly on — the same hue the model picker gives that
+        // provider — so a list of a dozen profiles groups by eye instead of reading
+        // as one grey column. A profile on no single provider gets the muted
+        // fallback, which is what the bar looked like before any of this.
+        readonly property string provider:
+          Palette.dominantProvider(Model.rowsFor(modelData))
+        color: rowItem.isActive
+          ? root.accent
+          : Palette.providerTint(provider, root.accent, Color.popups.background, root.veryMuted)
+        opacity: rowItem.isActive ? (root.drift ? 0.45 : 1) : 0.7
 
         Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
       }

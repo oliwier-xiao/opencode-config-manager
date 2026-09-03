@@ -189,6 +189,13 @@ qml_has  "ProfileEditor.qml" "Catalog.nearestVariant(root.catalogIndex, modelId,
 # says "READING WHAT IS ON DISK" instead; the rows under it must not contradict it.
 qml_has  "ProfileList.qml" "root.ready ? Model.summary(modelData)" \
          "a profile row waits for the roster before it counts anything"
+
+# The bar down the left of a profile row answers "which one is running" first, and
+# groups the rest by provider second. Losing either half is a silent regression.
+qml_has  "ProfileList.qml" "rowItem.isActive" \
+         "the running profile still gets the accent"
+qml_has  "ProfileList.qml" "Palette.dominantProvider(Model.rowsFor(modelData))" \
+         "and the others take the tint of the provider they are mostly on"
 # Model.js is a .pragma library: setShape writes a global no binding depends on,
 # and `list` beats `detect` every time, so without this the first paint keeps the
 # wrong shape until something unrelated invalidates it.

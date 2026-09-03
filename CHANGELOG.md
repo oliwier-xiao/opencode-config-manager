@@ -78,6 +78,10 @@ listing them, until the cache was deleted by hand.
 
 ### Changed
 
+- **A profile's left bar takes the colour of the provider it is mostly on.** The
+  running one keeps the accent; the rest were transparent, so a long list read as one
+  grey column. Same hue the model picker gives that provider, and a profile spread
+  evenly across providers stays neutral rather than picking one.
 - **Free is one key, not two.** It mixed OpenRouter and OpenCode Zen, so the set that
   costs nothing needed both. It is now every agent on a free OpenCode Zen model, and the
   OpenRouter half became **Free (OpenRouter)**, where the pool is wider.
