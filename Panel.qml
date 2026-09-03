@@ -113,6 +113,10 @@ Panel {
   property string errorMessage: ""
   property string errorPath: ""
   property string toast: ""
+  // Result of `oc-profiles doctor`, consumed exactly as the backend reports it.
+  // Any shape mismatch clears this to [] and the section stays hidden — the panel
+  // never validates here, it only forwards a code to `repair --fix` on click.
+  property var healthIssues: []
   // A non-fatal thing the user should know: another config file outranks the
   // one being edited, so a switch here would appear to do nothing.
   property string notice: ""
@@ -199,6 +203,7 @@ Panel {
   function reload() {
     if (!listProc.running) listProc.running = true
     if (!detectProc.running) detectProc.running = true
+    if (!doctorProc.running) doctorProc.running = true
   }
 
   function refresh() {
@@ -265,6 +270,24 @@ Panel {
     runAction(["revert"], root.actionEnv, function (res) {
       if (!res || res.ok !== true) return
       root.toast = "Previous config restored."
+      toastTimer.restart()
+    })
+  }
+
+  // One-click fix for a doctor issue. The backend owns validation: the code and
+  // the profile id (when the issue names one) are forwarded untouched, and the
+  // shared actionProc path reports failures via setError. reload() follows every
+  // action, so the section re-reads after each fix.
+  function fixHealthIssue(issue) {
+    if (!issue || !issue.code) return
+    var args = ["repair", "--fix", String(issue.code)]
+    var pid = (issue && (issue.profile || issue.profileId || issue.profile_id)) || ""
+    if (pid) args.push("--profile", String(pid))
+    args.push("--apply")
+    var code = String(issue.code)
+    runAction(args, root.actionEnv, function (res) {
+      if (!res || res.ok !== true) return
+      root.toast = "Fixed " + root.plain(code) + "."
       toastTimer.restart()
     })
   }
@@ -621,6 +644,7 @@ Panel {
         errorPath: root.errorPath
         notice: root.notice
         toast: root.toast
+        healthIssues: root.healthIssues
         cursorActive: root.cursorActive
         selectedIndex: root.selectedIndex
 
@@ -654,6 +678,10 @@ Panel {
         onOpenFileRequested: function (path) { Quickshell.execDetached(["xdg-open", path]) }
         onCursorMoved: function (index) { root.cursorActive = true; root.selectedIndex = index }
         onDismissToast: root.toast = ""
+        onFixRequested: function (index) {
+          if (index < 0 || index >= root.healthIssues.length) return
+          root.fixHealthIssue(root.healthIssues[index])
+        }
       }
 
       ProfileEditor {
@@ -899,6 +927,38 @@ Panel {
         }
         root.notice = notice
       }
+    }
+  }
+
+  // Health, read on every reload() alongside list and detect. The `doctor` verb
+  // belongs to a parallel change: when it is missing, prints usage, exits
+  // non-zero, or returns anything but {ok:true, issues:[...]}, the section hides
+  // entirely — no crash, no banner. Each issue keeps its backend shape
+  // ({code,file,detail,fixable,fix,...}); the panel never validates it here.
+  Process {
+    id: doctorProc
+    command: [root.pluginDir + "/bin/oc-profiles", "doctor"]
+    environment: root.actionEnv
+    stdout: StdioCollector {
+      waitForEnd: true
+      onStreamFinished: {
+        var parsed = null
+        try { parsed = JSON.parse(String(text || "")) } catch (e) { parsed = null }
+        if (!parsed || parsed.ok !== true || !Array.isArray(parsed.issues)) {
+          root.healthIssues = []
+          return
+        }
+        var out = []
+        for (var i = 0; i < parsed.issues.length; i++) {
+          var it = parsed.issues[i]
+          if (!it || typeof it.code !== "string" || it.code === "") continue
+          out.push(it)
+        }
+        root.healthIssues = out
+      }
+    }
+    onExited: function (code) {
+      if (code !== 0) root.healthIssues = []
     }
   }
 

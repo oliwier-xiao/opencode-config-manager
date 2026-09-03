@@ -19,6 +19,7 @@ for suite in "bash $REPO/test/safe-read.test.sh" \
              "python3 $REPO/test/jsonc.test.py" \
              "bash $REPO/test/detect.test.sh" \
              "bash $REPO/test/write.test.sh" \
+             "bash $REPO/test/doctor.test.sh" \
              "bash $REPO/test/sync.test.sh" \
              "bash $REPO/test/qml.test.sh" \
              "bash $REPO/test/templates.test.sh" \

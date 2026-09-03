@@ -34,6 +34,9 @@ Item {
   property string errorPath: ""
   property string toast: ""
   property string notice: ""
+  // Doctor issues from the panel, shown compactly above PROFILES. Hidden when
+  // empty; the panel clears this on any shape mismatch, so no validation here.
+  property var healthIssues: []
 
   property bool cursorActive: false
   property int selectedIndex: 0
@@ -90,6 +93,25 @@ Item {
   signal openFileRequested(string path)
   signal cursorMoved(int index)
   signal dismissToast()
+  signal fixRequested(int index)
+
+  // The sentence the backend wrote. No code, and no second label kept in step
+  // with one: a doctor that learns a new issue would otherwise draw it here as
+  // a bare `E_SOMETHING` until this file caught up. The caller wraps it in
+  // Model.plain() — this text comes from files on disk somebody else can write.
+  function healthText(issue) {
+    return issue ? String(issue.detail || issue.code || "") : ""
+  }
+
+  // Is anything actually broken, or is this only things worth knowing? It decides
+  // both whether the strip exists at all and what colour it takes: a config that
+  // will not do what it says earns the urgent one, and a note about a spelling
+  // that still works never earns a row of its own.
+  readonly property bool healthBroken: {
+    var list = root.healthIssues || []
+    for (var i = 0; i < list.length; i++) if (list[i] && list[i].fixable === true) return true
+    return false
+  }
 
   function selectedProfile() {
     var list = root.visibleProfiles
@@ -318,6 +340,105 @@ Item {
               foreground: root.foreground
               accent: root.accent
               onClicked: root.saveCurrentRequested()
+            }
+          }
+        }
+      }
+    }
+
+    // Health: one compact strip above PROFILES, and only something repairable
+    // ever summons it. The warnings — W_VARIANT_DEPRECATED above all — are true
+    // of a config that works and stay true for as long as it does, so on their
+    // own they would be a permanent box in everybody's panel whose whole content
+    // is "nothing is broken". They ride along as context once a real problem has
+    // opened the strip, and are otherwise left to `oc-profiles doctor`.
+    // Never touches `ready` or `detected`, so it cannot disturb the first-paint
+    // gating above.
+    Loader {
+      width: parent.width
+      active: root.healthBroken
+      visible: active
+      height: active ? implicitHeight : 0
+      sourceComponent: healthStrip
+    }
+
+    Component {
+      id: healthStrip
+      BorderSurface {
+        width: header.width
+        implicitHeight: healthCol.implicitHeight + Style.spacing.xxl * 2
+        radius: Style.cornerRadius
+        // The same two surfaces the strip above this one already uses: an error
+        // reads as an error, and a note reads as a note. A panel that painted
+        // "you are one release behind" in the colour of "your config is not
+        // being read" would teach people to ignore the colour.
+        color: root.healthBroken ? Util.alpha(Color.urgent, 0.10)
+                                 : Util.alpha(root.foreground, 0.05)
+        borderSpec: Border.flat(root.healthBroken ? Util.alpha(Color.urgent, 0.35)
+                                                  : Util.alpha(root.foreground, 0.18),
+                                Style.normalBorderWidth)
+
+        Column {
+          id: healthCol
+          anchors.left: parent.left
+          anchors.right: parent.right
+          anchors.verticalCenter: parent.verticalCenter
+          anchors.leftMargin: Style.spacing.xxl
+          anchors.rightMargin: Style.spacing.xxl
+          spacing: Style.spacing.md
+
+          Repeater {
+            model: root.healthIssues
+            delegate: Item {
+              width: parent.width
+              height: Math.max(issueText.implicitHeight, fixButton.visible ? fixButton.implicitHeight : 0)
+
+              readonly property bool broken: modelData && modelData.fixable === true
+
+              // The dot the profile rows use, saying the same thing it says
+              // there: this row is the one that costs you something.
+              Rectangle {
+                id: issueDot
+                anchors.left: parent.left
+                anchors.top: parent.top
+                anchors.topMargin: Math.round((issueText.implicitHeight - height) / 2)
+                width: Style.space(6)
+                height: width
+                radius: width / 2
+                color: parent.broken ? Color.urgent : root.veryMuted
+              }
+
+              Text {
+                id: issueText
+                anchors.left: issueDot.right
+                anchors.leftMargin: Style.spacing.md
+                anchors.right: fixButton.visible ? fixButton.left : parent.right
+                anchors.rightMargin: fixButton.visible ? Style.spacing.lg : 0
+                anchors.top: parent.top
+                textFormat: Text.PlainText
+                text: Model.plain(root.healthText(modelData))
+                color: parent.broken ? root.foreground : root.muted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.bodySmall
+                wrapMode: Text.WordWrap
+              }
+
+              // Right-aligned and on the first line of its row, the way every
+              // other per-row action in this panel sits. Only the issues that
+              // have a repair get one; the rest are read and left alone.
+              Button {
+                id: fixButton
+                anchors.right: parent.right
+                anchors.top: parent.top
+                visible: parent.broken
+                text: "Fix"
+                fontSize: Style.font.caption
+                bordered: true
+                enabled: !root.busy
+                foreground: root.foreground
+                accent: root.accent
+                onClicked: root.fixRequested(index)
+              }
             }
           }
         }
