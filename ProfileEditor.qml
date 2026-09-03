@@ -77,7 +77,10 @@ Item {
     var next = Model.setRowModel(root.profile, root.rows[index], modelId)
     // Carrying an effort across a model change is the one place this can write
     // a config that loads and then fails: not every model offers every effort.
-    var wanted = root.rows[index].file === "ohmy" ? root.rows[index].variant : ""
+    // Every row that has an effort control gets this, not just the oh-my-openagent
+    // ones — opencode's own AgentConfig carries a variant too, and an opencode
+    // agent row was keeping the old model's effort on a new model that has none.
+    var wanted = root.rows[index].variant
     if (wanted) next = Model.setRowVariant(next, root.rows[index],
                                            Catalog.nearestVariant(root.catalogIndex, modelId, wanted))
     root.profileEdited(next)
