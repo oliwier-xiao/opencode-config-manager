@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.1.3
 
 New models (e.g. `muse-spark-1.3`) stayed invisible for days despite `opencode models`
 listing them, until the cache was deleted by hand.
@@ -16,7 +16,39 @@ listing them, until the cache was deleted by hand.
 - **Reachability has its own short TTL.** `opencode models` is local and takes seconds,
   so what you can reach is re-checked every 15 minutes, while the multi-MB models.dev
   catalogue keeps the long `catalogRefreshHours` TTL. Connecting a provider — or a new
-  model dropping — shows up within minutes, without re-downloading the catalogue.
+  model dropping — shows up within minutes, without re-downloading the catalogue. The
+  two clocks are read off two different files, so the short cycle cannot postpone the
+  long one: measured against the file it rewrites, the catalogue would have been
+  downloaded once and then never again.
+- **A refresh asked for during a background sync is no longer dropped.** `r`,
+  middle-click and `refresh` over IPC set a flag on a process whose environment was
+  already fixed at spawn, so the forced run never happened — and syncing on every
+  panel open is what made that the usual case. The request is now held and run as
+  soon as the one in flight finishes.
+- **A model the catalogue rules out stays out.** `opencode models` lists models
+  models.dev marks as unable to call tools; those were being added back as ordinary,
+  selectable rows, which is a model that loads and then fails on an agent's first
+  tool call. Only ids models.dev has genuinely never heard of are kept now.
+- **Changing the model on an opencode agent keeps an effort it supports.** Efforts
+  were only stepped down for oh-my-openagent rows. opencode's own `AgentConfig`
+  carries one too, so an opencode agent kept the old model's effort on a new model
+  that offered none — the one config this plugin could write that loads and then fails.
+- **A broken `opencode` costs one probe, not one per panel open.** A failed or
+  timed-out `opencode models` left the reachability clock untouched, so the next
+  panel open tried again, and the next. The attempt is now recorded whether or not
+  it worked, and a non-zero exit no longer throws away a list opencode did print —
+  it returns non-zero when any single provider is missing credentials.
+- **`categories.<name>.models` is accepted.** It is a real field on
+  oh-my-openagent's category schema; only the agent schema lacks it. The refusal
+  applied to both, with a reason that was only ever true of agents.
+- **The refresh timer works at every setting.** At `catalogRefreshHours` above 596
+  the interval overflowed a 32-bit int, so the timer never fired and restarted
+  itself hundreds of times a second. The settings slider goes to 720.
+- **The model list is built from the config folder you pointed the plugin at.**
+  The sync was the one process not told `OPENCODE_CONFIG_DIR`.
+- **`dev-sync.sh` removes what it excludes.** `--delete` leaves already-deployed
+  copies of an excluded name in place; a `.codegraph` symlink from an earlier run
+  stayed in the plugin folder and kept failing `omarchy plugin validate`.
 
 ## 1.1.2
 

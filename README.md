@@ -277,7 +277,7 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-173 checks over the reader and writer, the hardening, the row model, the JSONC editor,
+203 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
@@ -323,7 +323,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | `manageOpencodeJson` | on | manage `model`, `small_model` and `agent` in `opencode.json` |
 | `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — plus a file-level `fallback_models` on the legacy `oh-my-openagent.json`, where that key still exists. Off forces the plain-opencode view |
 | `keepBackups` | 10 | copies kept of each config file, oldest deleted past this. The one Undo needs is never pruned |
-| `catalogRefreshHours` | 24 | how often the model list is rebuilt |
+| `catalogRefreshHours` | 24 | how often the models.dev catalogue is re-downloaded |
 | `showModelMeta` | on | show context window and price on every model row |
 | `configDir` | — | point at a second set of config files, the way `OPENCODE_CONFIG_DIR` does. Each folder gets its own profiles |
 
@@ -383,7 +383,7 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 |---|---|
 | `~/.local/state/omarchy/opencode-configs/profiles.json` | your profiles, favourites and recents |
 | `~/.local/state/omarchy/opencode-configs/backups/` | one folder per switch, with a copy of each file |
-| `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on a timer |
+| `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on panel open when stale |
 
 Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
 the keys a profile claims.
