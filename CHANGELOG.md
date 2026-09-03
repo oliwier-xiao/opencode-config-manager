@@ -1,5 +1,57 @@
 # Changelog
 
+## 1.3.0
+
+The panel refused a broken profile and left you to fix it in a text editor. It finds
+the same breakage in the config itself now — including the shape oh-my-openagent's own
+migration writes — and repairs it in one click.
+
+### Added
+
+- **A Health strip, and `oc-profiles doctor`.** Read on every panel open, drawn only
+  when something is wrong: a config with nothing to say about it takes no height at
+  all. Each line is what happened rather than a code, and carries a **Fix** only where
+  there is a repair to run. Anything that merely wants knowing draws in the quiet
+  colours the notices already use — an "you are a release behind" painted like a broken
+  config teaches people to stop reading the colour.
+- **`oc-profiles repair --fix CODE [--profile ID] [--apply]`.** A dry run by default,
+  printing what it would change and touching nothing. `--apply` copies the file first,
+  writes through the same splice a switch uses, reads the result back, and puts the
+  original back itself if the repair did not land. **Restore the previous config** undoes
+  it like any other write.
+- **Four repairs**, each for a state that loads without doing what it says:
+  - `E_MODELS_IN_CONFIG` — an agent in `~/.omo/omo.jsonc` set to `models`, which is what
+    `oh-my-openagent config migrate` writes and what its own `AgentOverrideConfigSchema`
+    has no field for: the key is stripped on load and the agent runs on a default. Turned
+    back into `model` plus `fallback_models`, in the order the array carried them.
+  - `E_MODELS_IN_PROFILE` — the same shape in a saved profile, which is how one becomes
+    permanently un-appliable: every switch to it is refused as `E_FIELD_4X`, and the
+    only way out was hand-editing `profiles.json`.
+  - `E_BARE_AGENT_STRING` — `"build": "provider/model"` in `opencode.json`, which
+    opencode's `AgentConfig` has no string branch for.
+  - `E_FILE_FALLBACK` — a file-level `fallback_models` under `[opencode]`, which
+    `doctor` reports against `Affects: plugin startup`.
+
+### Fixed
+
+- **A category's `models` is left alone, everywhere.** `CategoryConfigSchema` declares
+  it; `AgentOverrideConfigSchema` does not. Reporting a category as broken would have
+  been a repair rewriting a config that already works — the same asymmetry the preflight
+  refusal learned one release earlier, now applied to what the doctor reads as well.
+- **A repair's backup is reachable from Undo.** A write with no way back is not one this
+  plugin should make; the store-only repair deliberately stays out of Undo's reach,
+  because its backup holds no config to put back.
+
+### Notes
+
+`variant` is reported and never rewritten. It is the old spelling of `reasoning`, both
+still load, and it is one line however many entries carry it: a config is migrated all at
+once, so twenty-four rows would be saying one thing twenty-four times.
+
+Nothing here runs `oh-my-openagent config migrate` for you, and nothing deletes the legacy
+config file. The first is what produced the breakage this release repairs; the second may
+be the only copy of a setup somebody wants back.
+
 ## 1.2.0
 
 New models (e.g. `muse-spark-1.3`) stayed invisible for days despite `opencode models`

@@ -14,7 +14,7 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
-VERSION="1.2.0"
+VERSION="1.3.0"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -1417,6 +1417,600 @@ cmd_backups() {
   printf '%s\n' "$out" | head -c "$MAX_EMIT_BYTES"
 }
 
+# ---------------------------------------------------------------- health
+
+# What is wrong, as one JSON line the Health section parses:
+#   {ok:true, issues:[{code,file,profile,agent,detail,fixable,fix}...]}
+# Never locks, never writes a config. Everything but the final line goes to
+# stderr, so stdout stays exactly one line. `fix` names the --fix code that
+# repairs the issue, or "" when there is no automatic repair.
+cmd_doctor() {
+  ensure_state
+  local ohmy opencode scope unified
+  ohmy="$(resolve_ohmy)"
+  opencode="$(resolve_opencode)"
+  scope="$(scope_for ohmy)"
+  unified=false
+  [ "$scope" != '[]' ] && unified=true
+
+  local ohmy_doc opencode_doc
+  ohmy_doc="$(read_projected ohmy)"
+  opencode_doc="$(read_projected opencode)"
+  [ -n "$ohmy_doc" ] || ohmy_doc="null"
+  [ -n "$opencode_doc" ] || opencode_doc="null"
+
+  local issues='[]'
+
+  # A bare model string under `agent` is a config opencode will not load —
+  # the same shape the apply preflight refuses as E_AGENT_SHAPE.
+  if [ "$opencode_doc" != "null" ]; then
+    local k
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      issues="$(jq -cn --argjson acc "$issues" --arg f "$opencode" --arg k "$k" \
+        '$acc + [{code:"E_BARE_AGENT_STRING", file:$f, profile:"", agent:$k,
+                  detail:("agent." + $k + " is a bare model string; opencode needs { \"model\": ... } there."),
+                  fixable:true, fix:"E_BARE_AGENT_STRING"}]')"
+    done < <(printf '%s' "$opencode_doc" | jq -r \
+      '(.agent // {}) | to_entries[] | select(.value | type != "object") | .key // empty' 2>/dev/null)
+  fi
+
+  # A file-level fallback_models under the unified [opencode] block is not a
+  # field the schema has. Per-agent ones are fine — this is the file-level
+  # key, which is a different thing that happens to share a name.
+  if [ "$unified" = true ] && [ "$ohmy_doc" != "null" ]; then
+    if printf '%s' "$ohmy_doc" | jq -e 'has("fallback_models")' >/dev/null 2>&1; then
+      issues="$(jq -cn --argjson acc "$issues" --arg f "$ohmy" \
+        '$acc + [{code:"E_FILE_FALLBACK", file:$f, profile:"", agent:"",
+                  detail:"[opencode] has a file-level fallback_models key, which the unified config does not accept.",
+                  fixable:true, fix:"E_FILE_FALLBACK"}]')"
+    fi
+  fi
+
+  # An agent entry carrying `models` is the shape oh-my-openagent's own 4.19
+  # migration writes and its own schema then strips: the agent loses its pin at
+  # startup. A category is not an agent — CategoryConfigSchema does declare
+  # `models` — so only the agent half is ever an issue, on disk or in the store.
+  #
+  # One row per profile rather than per agent. A migration rewrites every entry
+  # it touches, so the per-agent list is two dozen rows saying one thing, and
+  # the repair is one button either way.
+  local raw
+  raw="$(read_store 2>/dev/null)" || raw="$EMPTY_STORE"
+  if printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
+    local row pid pname pcount
+    while IFS= read -r row; do
+      [ -n "$row" ] || continue
+      pid="$(printf '%s' "$row" | jq -r '.profile')"
+      pname="$(printf '%s' "$row" | jq -r '.name')"
+      pcount="$(printf '%s' "$row" | jq -r '.count')"
+      issues="$(jq -cn --argjson acc "$issues" --arg f "$PROFILES" \
+        --arg p "$pid" --arg n "$pname" --argjson c "$pcount" \
+        '$acc + [{code:"E_MODELS_IN_PROFILE", file:$f, profile:$p, agent:"", count:$c,
+                  detail:("profile \"" + $n + "\": " + ($c|tostring)
+                          + (if $c == 1 then " agent sets" else " agents set" end)
+                          + " \"models\", which oh-my-openagent has no field for and strips at startup, leaving them with no model."),
+                  fixable:true, fix:"E_MODELS_IN_PROFILE"}]')"
+    done < <(printf '%s' "$raw" | jq -c '
+      .profiles[]?
+      | .id as $pid | (.name // .id) as $pname
+      | [ .targets[]? | select(.file == "ohmy")
+          | (.payload.agents // {}) | to_entries[]
+          | select(.value | type == "object" and has("models")) ] as $hit
+      | select(($hit | length) > 0)
+      | {profile:$pid, name:$pname, count:($hit | length)}' 2>/dev/null)
+  fi
+
+  # The same shape on the live config, which is where `oh-my-openagent config
+  # migrate` puts it: the file validates, the plugin starts, and every agent it
+  # touched quietly runs on a default. Nothing else reports this, because
+  # nothing else reads the schema that dropped the key.
+  if [ "$ohmy_doc" != "null" ]; then
+    local live_models
+    live_models="$(printf '%s' "$ohmy_doc" | jq -r \
+      '[(.agents // {}) | to_entries[] | select(.value | type == "object" and has("models"))] | length' 2>/dev/null)"
+    case "$live_models" in ''|*[!0-9]*) live_models=0 ;; esac
+    if [ "$live_models" -gt 0 ]; then
+      issues="$(jq -cn --argjson acc "$issues" --arg f "$ohmy" --argjson c "$live_models" \
+        '$acc + [{code:"E_MODELS_IN_CONFIG", file:$f, profile:"", agent:"", count:$c,
+                  detail:(($c|tostring)
+                          + (if $c == 1 then " agent in" else " agents in" end)
+                          + " your oh-my-openagent config set \"models\", which its own schema drops on load — those agents are running on a default, not on the model you pinned."),
+                  fixable:true, fix:"E_MODELS_IN_CONFIG"}]')"
+    fi
+  fi
+
+  # A legacy per-harness file nobody reads any more, kept for information.
+  # Never deleted automatically: it may be the only copy of an old setup.
+  if [ -f "$OMO_DIR/omo.jsonc" ] || [ -f "$OMO_DIR/omo.json" ]; then
+    local legacy
+    for legacy in "$CFG_DIR/oh-my-openagent.jsonc" "$CFG_DIR/oh-my-openagent.json" \
+                 "$CFG_DIR/oh-my-opencode.jsonc" "$CFG_DIR/oh-my-opencode.json"; do
+      if [ -f "$legacy" ]; then
+        issues="$(jq -cn --argjson acc "$issues" --arg f "$legacy" \
+          '$acc + [{code:"W_LEGACY_OHMY", file:$f, profile:"", agent:"",
+                    detail:"A legacy oh-my-openagent file exists while the unified ~/.omo config is active; it is no longer read.",
+                    fixable:false, fix:""}]')"
+      fi
+    done
+  fi
+
+  # `variant` is the old spelling of `reasoning`. Both still load — the plugin
+  # normalises one into the other at read time — so this is information only,
+  # and one line rather than one line per entry: a config is migrated all at
+  # once, so the count is the only part that differs between the rows.
+  # No automatic repair renames a field that still works.
+  if [ "$ohmy_doc" != "null" ]; then
+    local vcount
+    vcount="$(printf '%s' "$ohmy_doc" | jq -r '
+      [ ((.agents // {}), (.categories // {})) | to_entries[]
+        | select(.value | type == "object" and has("variant")) ] | length' 2>/dev/null)"
+    case "$vcount" in ''|*[!0-9]*) vcount=0 ;; esac
+    if [ "$vcount" -gt 0 ]; then
+      issues="$(jq -cn --argjson acc "$issues" --arg f "$ohmy" --argjson c "$vcount" \
+        '$acc + [{code:"W_VARIANT_DEPRECATED", file:$f, profile:"", agent:"", count:$c,
+                  detail:(($c|tostring) + " entries use \"variant\"; the current spelling is \"reasoning\". Both are read, so nothing is broken."),
+                  fixable:false, fix:""}]')"
+    fi
+  fi
+
+  # Best effort only: whether the installed oh-my-openagent predates the 4.x
+  # unified config. No network, no failure — when the version cannot be told,
+  # there is simply no issue.
+  {
+    local pkg="" pf="" ver=""
+    pkg="$(omo_package_dir)" || pkg=""
+    if [ -n "$pkg" ]; then
+      pf="$(read_capped "$pkg/package.json" "$MAX_PACKAGE_BYTES" "the oh-my-openagent package manifest")" || pf=""
+      if [ -n "$pf" ]; then
+        ver="$(jq -r '.version // ""' "$pf" 2>/dev/null)"; rm -f "$pf"
+        case "$ver" in
+          [0-3].*)
+            issues="$(jq -cn --argjson acc "$issues" --arg v "$ver" \
+              '$acc + [{code:"W_OUTDATED_OMO", file:"", profile:"", agent:"",
+                        detail:("oh-my-openagent " + $v + " predates the unified config; consider upgrading."),
+                        fixable:false, fix:""}]')" ;;
+        esac
+      fi
+    fi
+  } 2>/dev/null || true
+
+  jq -cn --argjson issues "$issues" '{ok:true, issues:$issues}'
+}
+
+# ---------------------------------------------------------------- repair
+
+# Fix one doctor code. A dry run by default: {ok:true, dryRun:true, diff:[...]}
+# and nothing written, no lock taken. --apply backs up first, then writes,
+# and reports {ok:true, fixed:N}. Anything else is a refusal (exit 2).
+cmd_repair() {
+  local fix="" profile="" apply=0
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --fix)       fix="${2:-}"; shift 2 ;;
+      --fix=*)     fix="${1#--fix=}"; shift ;;
+      --profile)   profile="${2:-}"; shift 2 ;;
+      --profile=*) profile="${1#--profile=}"; shift ;;
+      --apply)     apply=1; shift ;;
+      *) refuse "E_BAD_FIX" "Unknown repair option \"$1\". Use --fix <code> [--profile <id>] [--apply]." ;;
+    esac
+  done
+  [ -n "$fix" ] || refuse "E_BAD_FIX" "Nothing to repair. Use --fix <code> [--profile <id>] [--apply]."
+  case "$fix" in
+    E_MODELS_IN_PROFILE) repair_models "$profile" "$apply" ;;
+    E_MODELS_IN_CONFIG)  repair_models_config "$apply" ;;
+    E_BARE_AGENT_STRING) repair_bare "$apply" ;;
+    E_FILE_FALLBACK)     repair_fallback "$apply" ;;
+    W_LEGACY_OHMY|W_OUTDATED_OMO|W_VARIANT_DEPRECATED)
+      refuse "E_NOT_FIXABLE" "\"$fix\" is information only and has no automatic repair." ;;
+    *) refuse "E_BAD_FIX" "Unknown fix code \"$fix\"." ;;
+  esac
+}
+
+# A repair that rewrote a config file is a write like any other, so Undo has to
+# reach it: the footer restores `.state.lastBackup`, and a fix left out of that
+# is a fix with no way back. Set before prune_backups, which reads the same field
+# to decide which directory it may never delete.
+#
+# The store-only repair does not call this. Its backup holds no config, so
+# pointing Undo at it would offer to restore nothing at all.
+claim_backup() {
+  local stamp="$1"
+  store_update --arg backup "$stamp" '.state.lastBackup = $backup'
+}
+
+# One entry's `models` array, turned back into the pair the schema does have.
+# `models[0]` is the pin, so it promotes into `model` when the entry has none of
+# its own; the rest become `fallback_models`, with anything naming the pin again
+# dropped (a string becomes {model:...}, an object carries over as-is). The
+# ordering is oh-my-openagent's own: it read `model` + `fallback_models` in that
+# order when it wrote the array, so reading it back the same way is lossless.
+#
+# A definition rather than a bare expression: the body is a pipeline, and a
+# pipeline spliced straight into `.value |= …` binds to the wrong half of it —
+# which rewrites nothing and leaves the caller preflighting the shape it was
+# asked to remove. As a named function there is nothing left to get wrong.
+MODELS_TO_FALLBACKS='def models_to_fallbacks:
+  . as $e
+  | ($e.models // null) as $m
+  | if ($m | type) != "array" then ($e | del(.models))
+    else
+      (($e.model // null) as $cur
+       | (if $cur != null then $cur
+          else ($m[0] | if type == "string" then .
+                         elif type == "object" then (.model // null)
+                         else null end)
+          end) as $base
+       | ($m[1:] // []) as $rest
+       | ([$rest[]
+           | . as $el
+           | if ($el | type) == "string" then
+               (if $el != $base then {model:$el} else empty end)
+             elif ($el | type) == "object" then
+               (if (($el.model // null) != $base) then $el else empty end)
+             else empty end]) as $fb
+       | ($e | del(.models)
+          | if $base != null then .model = $base else . end
+          | if ($fb | length) > 0 then .fallback_models = $fb
+            else del(.fallback_models) end))
+    end;'
+
+# The stored entry loses `models`, rebuilt by MODELS_TO_FALLBACKS above. Agents
+# only: a category may carry `models` and rewriting one would be changing a
+# config the software reads perfectly well. Only targets that actually changed
+# get their manages clamped and their fingerprints re-derived.
+repair_models() {
+  local id="$1" apply="$2"
+  [ -n "$id" ] || refuse "E_NO_PROFILE" "Repairing E_MODELS_IN_PROFILE needs --profile <id>."
+  ensure_state
+  [ "$apply" = 1 ] && take_lock
+
+  local profile
+  profile=$(store_jq -c --arg id "$id" '.profiles[] | select(.id == $id)' 2>/dev/null)
+  [ -n "$profile" ] || refuse "E_NO_PROFILE" "No profile called \"$id\"."
+
+  local rows
+  rows=$(printf '%s' "$profile" | jq -c '
+    .targets | to_entries[]
+    | .key as $ti | .value
+    | select(.file == "ohmy")
+    | ((.payload.agents // {}) | to_entries[])
+    | select(.value | type == "object" and has("models"))
+    | {ti:$ti, kind:"agents", name:.key}' 2>/dev/null)
+
+  local new_profile="$profile" diff='[]' fixed=0 tis='[]'
+  local row ti kind name before after
+  while IFS= read -r row; do
+    [ -n "$row" ] || continue
+    ti="$(printf '%s' "$row" | jq -r '.ti')"
+    kind="$(printf '%s' "$row" | jq -r '.kind')"
+    name="$(printf '%s' "$row" | jq -r '.name')"
+    before="$(printf '%s' "$new_profile" | jq -c \
+      --argjson ti "$ti" --arg k "$kind" --arg n "$name" \
+      '.targets[$ti].payload[$k][$n]')"
+    after="$(printf '%s' "$before" | jq -c "$MODELS_TO_FALLBACKS models_to_fallbacks")"
+    new_profile="$(printf '%s' "$new_profile" | jq -c \
+      --argjson ti "$ti" --arg k "$kind" --arg n "$name" --argjson a "$after" \
+      '.targets[$ti].payload[$k][$n] = $a')"
+    diff="$(jq -cn --argjson d "$diff" --arg p "$id" \
+      --arg k "$kind" --arg n "$name" --argjson b "$before" --argjson a "$after" \
+      '$d + [{profile:$p, target:"ohmy", key:($k + "." + $n), before:$b, after:$a}]')"
+    fixed=$((fixed + 1))
+    tis="$(jq -cn --argjson t "$tis" --argjson i "$ti" \
+      '$t + [$i] | unique')"
+  done <<< "$rows"
+
+  if [ "$apply" != 1 ]; then
+    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    return 0
+  fi
+
+  [ "$fixed" -gt 0 ] || { jq -cn '{ok:true, fixed:0}'; return 0; }
+
+  # Clamp and re-fingerprint the touched targets only: manages arrives from
+  # the store, and under the unified scope "fallback_models" is not a key a
+  # profile may own.
+  local allowed payload mkeys fp
+  allowed="$(keys_for ohmy)"
+  while IFS= read -r ti; do
+    [ -n "$ti" ] || continue
+    mkeys="$(printf '%s' "$new_profile" | jq -c \
+      --argjson ti "$ti" --argjson d "$allowed" '.targets[$ti].manages // $d')"
+    mkeys="$(clamp_manages "$mkeys" "$allowed")"
+    payload="$(printf '%s' "$new_profile" | jq -c \
+      --argjson ti "$ti" '.targets[$ti].payload')"
+    fp="$(payload_fingerprint "$payload" "$allowed")"
+    new_profile="$(printf '%s' "$new_profile" | jq -c \
+      --argjson ti "$ti" --argjson m "$mkeys" --arg fp "$fp" \
+      '.targets[$ti].manages = $m | .targets[$ti].fingerprint = $fp')"
+  done < <(printf '%s' "$tis" | jq -r '.[]?' 2>/dev/null)
+
+  # The store is the thing being rewritten, so its own copy goes aside first.
+  # files:[] keeps this backup out of revert's reach: there is no config in
+  # it to put back.
+  local stamp dir
+  stamp="$(new_backup_stamp)"
+  dir="$BACKUPS/$stamp"
+  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  cp -pL "$PROFILES" "$dir/store.json" \
+    || refuse "E_PERM" "Cannot back up the profile store."
+  jq -n --arg ts "$stamp" \
+    '{ts:$ts, fromProfileId:null, toProfileId:null, files:[], repair:"E_MODELS_IN_PROFILE"}' \
+    > "$dir/meta.json"
+
+  store_update --argjson p "$new_profile" --arg at "$(now_iso)" '
+      .profiles = (.profiles | map(select(.id != $p.id)) + [$p + {updatedAt:$at}])'
+
+  prune_backups
+  warn "repair: profile store backup $stamp"
+  jq -cn --argjson n "$fixed" '{ok:true, fixed:$n}'
+}
+
+# The same rewrite against the live oh-my-openagent config, which is where its
+# own `config migrate` puts the shape its own schema then drops. Agents only,
+# and spliced through jsonc-edit like every other write here, so the comments
+# and the harness sections this tool does not manage come back untouched.
+repair_models_config() {
+  local apply="$1"
+  ensure_state
+  [ "$apply" = 1 ] && take_lock
+
+  local file doc
+  file="$(resolve_ohmy)"
+  [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
+  doc="$(read_projected ohmy)"
+  [ -n "$doc" ] && [ "$doc" != "null" ] \
+    || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
+
+  local keys payload diff='[]' fixed=0
+  keys=$(printf '%s' "$doc" | jq -r \
+    '(.agents // {}) | to_entries[] | select(.value | type == "object" and has("models")) | .key // empty' 2>/dev/null)
+
+  if [ -n "$keys" ]; then
+    payload="$(printf '%s' "$doc" | jq -c "$MODELS_TO_FALLBACKS"'
+      .agents |= with_entries(
+        if (.value | type) == "object" and (.value | has("models"))
+        then .value |= models_to_fallbacks else . end)' 2>/dev/null)"
+    [ -n "$payload" ] || refuse "E_WRITE" "Could not rewrite the agent entries."
+    local k before after
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      before="$(printf '%s' "$doc" | jq -c --arg k "$k" '.agents[$k]')"
+      after="$(printf '%s' "$payload" | jq -c --arg k "$k" '.agents[$k]')"
+      diff="$(jq -cn --argjson d "$diff" --arg f "$file" --arg k "$k" \
+        --argjson b "$before" --argjson a "$after" \
+        '$d + [{file:$f, target:"ohmy", key:("agents." + $k), before:$b, after:$a}]')"
+      fixed=$((fixed + 1))
+    done <<< "$keys"
+  else
+    payload="$doc"
+  fi
+
+  if [ "$apply" != 1 ]; then
+    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    return 0
+  fi
+  [ "$fixed" -gt 0 ] || { jq -cn '{ok:true, fixed:0}'; return 0; }
+
+  # Only `agents` is written back. A payload naming `categories` as well would
+  # have this rewrite own a key it did not touch, and a managed key a profile
+  # omits is a key an apply deletes.
+  local mkeys='["agents"]'
+  payload="$(printf '%s' "$payload" | jq -c '{agents}')"
+  preflight ohmy "$payload" "$file"
+
+  local stamp dir
+  stamp="$(new_backup_stamp)"
+  dir="$BACKUPS/$stamp"
+  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  cp -pL "$file" "$dir/ohmy.json" \
+    || refuse "E_PERM" "Cannot back up $(basename "$file")."
+  jq -n --arg ts "$stamp" --arg p "$file" --arg fp "$(fingerprint_logical ohmy)" \
+    '{ts:$ts, fromProfileId:null, toProfileId:null, files:[{logical:"ohmy", path:$p, fingerprint:$fp}]}' \
+    > "$dir/meta.json"
+
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
+  if ! write_projected ohmy "$payload" "$mkeys" | atomic_write "$file"; then
+    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
+    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The repair failed and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+
+  # Read back rather than trust the write: a splice that landed but left a
+  # `models` behind is the one outcome this repair exists to prevent.
+  local check left
+  check="$(read_projected ohmy)"
+  left=""
+  if [ "$check" = "null" ] || [ -z "$check" ]; then left="unreadable"; else
+    left=$(printf '%s' "$check" | jq -r \
+      '(.agents // {}) | to_entries[] | select(.value | type == "object" and has("models")) | .key // empty' 2>/dev/null \
+      | head -1)
+  fi
+  if [ -n "$left" ]; then
+    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The repair did not land and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+
+  claim_backup "$stamp"
+  prune_backups
+  warn "repair: backup $stamp"
+  jq -cn --argjson n "$fixed" '{ok:true, fixed:$n}'
+}
+
+# A bare agent.<name> string becomes {model:...} through the same projected
+# write an apply uses: preflighted, backed up, spliced so comments survive.
+repair_bare() {
+  local apply="$1"
+  ensure_state
+  [ "$apply" = 1 ] && take_lock
+
+  local file doc
+  file="$(resolve_opencode)"
+  [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
+  doc="$(read_projected opencode)"
+  [ -n "$doc" ] && [ "$doc" != "null" ] \
+    || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
+
+  local keys payload diff='[]' fixed=0
+  keys=$(printf '%s' "$doc" | jq -r \
+    '(.agent // {}) | to_entries[] | select(.value | type == "string") | .key // empty' 2>/dev/null)
+  local weird
+  weird=$(printf '%s' "$doc" | jq -r \
+    '(.agent // {}) | to_entries[] | select(.value | type != "object" and type != "string") | .key // empty' 2>/dev/null \
+    | head -1)
+  if [ -n "$keys" ]; then
+    payload="$(printf '%s' "$doc" | jq -c \
+      '.agent |= with_entries(if (.value | type) == "string" then .value = {model:.value} else . end)')"
+    local k before after
+    while IFS= read -r k; do
+      [ -n "$k" ] || continue
+      before="$(printf '%s' "$doc" | jq -c --arg k "$k" '.agent[$k]')"
+      after="$(printf '%s' "$payload" | jq -c --arg k "$k" '.agent[$k]')"
+      diff="$(jq -cn --argjson d "$diff" --arg f "$file" --arg k "$k" \
+        --argjson b "$before" --argjson a "$after" \
+        '$d + [{file:$f, target:"opencode", key:("agent." + $k), before:$b, after:$a}]')"
+      fixed=$((fixed + 1))
+    done <<< "$keys"
+  else
+    payload="$doc"
+  fi
+
+  if [ "$apply" != 1 ]; then
+    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    return 0
+  fi
+
+  [ -z "$weird" ] || refuse "E_AGENT_SHAPE" \
+    "\"$weird\" is not a model string or an object; fix it by hand."
+  [ "$fixed" -gt 0 ] || { jq -cn '{ok:true, fixed:0}'; return 0; }
+
+  local mkeys stamp dir
+  mkeys="$(keys_for opencode)"
+  preflight opencode "$payload" "$file"
+
+  stamp="$(new_backup_stamp)"
+  dir="$BACKUPS/$stamp"
+  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  cp -pL "$file" "$dir/opencode.json" \
+    || refuse "E_PERM" "Cannot back up $(basename "$file")."
+  jq -n --arg ts "$stamp" --arg p "$file" --arg fp "$(fingerprint_logical opencode)" \
+    '{ts:$ts, fromProfileId:null, toProfileId:null, files:[{logical:"opencode", path:$p, fingerprint:$fp}]}' \
+    > "$dir/meta.json"
+
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(opencode)
+  if ! write_projected opencode "$payload" "$mkeys" | atomic_write "$file"; then
+    "$SELF_DIR/safe-read" "$dir/opencode.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
+    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The repair failed and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+
+  local check left
+  check="$(read_projected opencode)"
+  left=""
+  if [ "$check" = "null" ] || [ -z "$check" ]; then left="unreadable"; else
+    left=$(printf '%s' "$check" | jq -r \
+      '(.agent // {}) | to_entries[] | select(.value | type != "object") | .key // empty' 2>/dev/null \
+      | head -1)
+  fi
+  if [ -n "$left" ]; then
+    "$SELF_DIR/safe-read" "$dir/opencode.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The repair did not land and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+
+  claim_backup "$stamp"
+  prune_backups
+  warn "repair: backup $stamp"
+  jq -cn --argjson n "$fixed" '{ok:true, fixed:$n}'
+}
+
+# The file-level fallback_models under [opencode] is deleted with a splice —
+# one key's span, never a re-serialisation — so the file's comments survive.
+repair_fallback() {
+  local apply="$1"
+  ensure_state
+  [ "$apply" = 1 ] && take_lock
+
+  local file scope doc
+  file="$(resolve_ohmy)"
+  scope="$(scope_for ohmy)"
+  [ "$scope" != '[]' ] \
+    || refuse "E_NOT_FIXABLE" "File-level fallback_models is only wrong under the unified [opencode] config."
+  [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
+  doc="$(read_projected ohmy)"
+  [ -n "$doc" ] && [ "$doc" != "null" ] \
+    || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
+
+  local before
+  before="$(printf '%s' "$doc" | jq -c '.fallback_models // empty' 2>/dev/null)"
+  local diff='[]'
+  if [ -n "$before" ]; then
+    diff="$(jq -cn --arg f "$file" --argjson b "$before" \
+      '[{file:$f, target:"ohmy", key:"fallback_models", before:$b, after:null}]')"
+  fi
+
+  if [ "$apply" != 1 ]; then
+    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    return 0
+  fi
+
+  if [ -z "$before" ]; then jq -cn '{ok:true, fixed:0}'; return 0; fi
+
+  preflight ohmy '{}' "$file"
+
+  local stamp dir k
+  stamp="$(new_backup_stamp)"
+  dir="$BACKUPS/$stamp"
+  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  cp -pL "$file" "$dir/ohmy.json" \
+    || refuse "E_PERM" "Cannot back up $(basename "$file")."
+  jq -n --arg ts "$stamp" --arg p "$file" --arg fp "$(fingerprint_logical ohmy)" \
+    '{ts:$ts, fromProfileId:null, toProfileId:null, files:[{logical:"ohmy", path:$p, fingerprint:$fp}]}' \
+    > "$dir/meta.json"
+
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
+  local args=(apply "$file" --payload '{}' --manages '["fallback_models"]')
+  while IFS= read -r k; do [ -n "$k" ] && args+=(--scope "$k"); done < <(printf '%s' "$scope" | jq -r '.[]?')
+  if ! "$JSONC" "${args[@]}" | atomic_write "$file"; then
+    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
+    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The repair failed and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+
+  local check
+  check="$(read_projected ohmy)"
+  if [ -z "$check" ] || [ "$check" = "null" ] \
+     || printf '%s' "$check" | jq -e 'has("fallback_models")' >/dev/null 2>&1; then
+    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
+    jq -cn --arg backup "$stamp" \
+      '{ok:false, code:"E_WRITE", message:"The repair did not land and the previous config was put back.", backup:$backup}'
+    exit 3
+  fi
+
+  claim_backup "$stamp"
+  prune_backups
+  warn "repair: backup $stamp"
+  jq -cn '{ok:true, fixed:1}'
+}
+
 usage() {
   cat <<'USAGE'
 oc-profiles — read and switch opencode model profiles
@@ -1432,6 +2026,9 @@ oc-profiles — read and switch opencode model profiles
   prefs                     upsert {favorites,recents} from stdin or $OC_PREFS_JSON
   backups                   every backup taken, newest first
   reload                    tell a running opencode to re-read its config
+  doctor                    report config health as one JSON line (never writes)
+  repair --fix CODE [--profile ID] [--apply]
+                            dry-run a repair by default; --apply writes it (backs up first)
 
 Settings come from the environment:
   OC_MANAGE_OHMY=1  OC_MANAGE_OPENCODE=1  OC_AUTO_RELOAD=1  OC_BACKUPS_KEEP=10
@@ -1464,6 +2061,8 @@ case "${1:-}" in
   prefs)    shift; cmd_prefs "$@" ;;
   backups)  shift; cmd_backups "$@" ;;
   reload)   shift; cmd_reload "$@" ;;
+  doctor)   shift; cmd_doctor "$@" ;;
+  repair)   shift; cmd_repair "$@" ;;
   --version) printf '%s\n' "$VERSION" ;;
   -h|--help|"") usage ;;
   *) usage; exit 1 ;;

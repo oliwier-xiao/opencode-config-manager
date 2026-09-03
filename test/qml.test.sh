@@ -221,6 +221,61 @@ QT_QPA_PLATFORM=offscreen timeout 60 "$QMLBIN" "$T/TimerRaw.qml" >/dev/null 2>&1
   && no "the unclamped expression overflows there" "it did not — the clamp is testing nothing" \
   || ok "the unclamped expression overflows there"
 
+# ---- the Health strip stays out of the way until there is something to say ----
+
+echo "=== the Health section is absent, not empty, when nothing is wrong ==="
+# The whole point of the section: a panel that carried a permanent "no problems"
+# box would spend a row of everybody's bar height on the state every config is in
+# almost all of the time. The Loader is what makes it absent rather than blank, so
+# the gate is asserted on the shipped file rather than described in a comment.
+grep -qE 'active:[[:space:]]*\(root\.healthIssues \|\| \[\]\)\.length > 0' "$REPO/ProfileList.qml" \
+  && ok "the strip is gated on there being an issue" \
+  || no "the strip is gated on there being an issue" "the Loader's active: gate is no longer that expression"
+
+grep -qE 'visible:[[:space:]]*active' "$REPO/ProfileList.qml" \
+  && ok "and it takes no height when inactive" \
+  || no "and it takes no height when inactive" "a Column keeps the gap of an invisible child"
+
+# A doctor that has not been installed yet, an older binary, a usage message: all
+# of them have to read as "no section", never as an error the user cannot act on.
+for guard in 'parsed.ok !== true' 'Array.isArray(parsed.issues)' 'root.healthIssues = []'; do
+  grep -qF "$guard" "$REPO/Panel.qml" \
+    && ok "Panel guards on \`$guard\`" \
+    || no "Panel guards on \`$guard\`" "the defensive parse no longer covers this"
+done
+
+HEALTHTEXT="$(extract_fn "$REPO/ProfileList.qml" healthText)" || HEALTHTEXT=""
+if [ -n "$HEALTHTEXT" ]; then
+  ok "ProfileList.healthText extracted from the shipped file"
+  cat > "$T/Health.qml" <<QML
+import QtQuick
+Item {
+  id: root
+  property int failed: 0
+  function check(c) { if (!c) root.failed++ }
+$HEALTHTEXT
+  Component.onCompleted: {
+    try {
+      // The sentence the backend wrote is what gets drawn.
+      check(root.healthText({ code: "E_MODELS_IN_CONFIG", detail: "2 agents set models." })
+            === "2 agents set models.")
+      // A code this file has never heard of still draws as something.
+      check(root.healthText({ code: "E_FROM_THE_FUTURE", detail: "" }) === "E_FROM_THE_FUTURE")
+      // And nothing at all is empty, not "undefined".
+      check(root.healthText(null) === "")
+      check(root.healthText({}) === "")
+    } catch (err) { root.failed = 99 }
+    Qt.exit(root.failed)
+  }
+}
+QML
+  QT_QPA_PLATFORM=offscreen timeout 60 "$QMLBIN" "$T/Health.qml" >/dev/null 2>&1 \
+    && ok "it draws the backend's sentence, and never \"undefined\"" \
+    || no "it draws the backend's sentence, and never \"undefined\"" "rc=$?"
+else
+  no "ProfileList.healthText can be found" "extraction failed — was it renamed?"
+fi
+
 printf '\n%d passed' "$pass"
 [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"
 printf '\n'

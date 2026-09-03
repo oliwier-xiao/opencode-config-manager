@@ -251,6 +251,37 @@ claiming a profile that no longer describes anything:
 > Your config has been edited since you switched to "Daily work".
 > `[ Update "Daily work" ]  [ Save as new profile ]`
 
+## When something is already broken
+
+Not everything that writes your config is this plugin. `oh-my-openagent config migrate` rewrites
+each agent's `model` and `fallback_models` into a `models` array — and the schema behind the
+`[opencode]` block has no `models` field, so every agent it touched loads without the model you
+pinned. The file validates. The plugin starts. The agent quietly runs on a default, and nothing
+says so.
+
+So the panel checks, on every open, and shows what it found — and only then. Each line is one
+problem, in the words of what actually happened rather than a code. **Fix** is
+there when there is a repair to run, and absent when there is only something worth knowing. A
+config with nothing wrong with it draws no strip at all.
+
+| | |
+|---|---|
+| **An agent set to `models`** | in your config, or in a saved profile. Rewritten back into `model` plus `fallback_models`, which is what the schema does have. A *category* keeps its `models` — that one is a real field, and rewriting it would be changing a config that works. |
+| **An agent set to a bare model string** | `"build": "provider/model"` becomes `"build": { "model": "provider/model" }`. opencode's `AgentConfig` has no string branch, so the short form is a config it refuses to load. |
+| **A file-level `fallback_models`** | under `[opencode]`, which `doctor` reports as `Unknown config key` against `Affects: plugin startup`. Deleted, with a splice, so the rest of the file is untouched. |
+| **A legacy `oh-my-openagent.json`** | left behind by the migration. Reported, never deleted: it may be the only copy of an old setup. |
+| **`variant` rather than `reasoning`** | one line, whatever the count. Both spellings load — this is worth knowing and not worth doing anything about. |
+
+Every repair copies the file first and is undone by the same **Restore the previous config** a
+switch is, and a repair that does not land puts the file back itself. From a terminal it is the
+same two verbs the panel calls, and a dry run is the default:
+
+```bash
+oc-profiles doctor                                     # what is wrong, as JSON
+oc-profiles repair --fix E_MODELS_IN_CONFIG            # what it would change
+oc-profiles repair --fix E_MODELS_IN_CONFIG --apply    # change it
+```
+
 ## Reloading opencode
 
 opencode reads its config when it starts. With **Restart opencode** turned on, this plugin does not
@@ -278,8 +309,8 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-256 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
-shape detection, the write path, and which profile counts as the running one.
+312 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
 a machine that does not have it installed, and so does the QML suite where there is no Qt6
