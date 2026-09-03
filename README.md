@@ -152,7 +152,7 @@ Which of the two you are running is worked out from the software, not from a lef
 plugin has to be in your `opencode.json` `plugin` list, or its package has to be installed. You
 can still force the plain view by turning `manageOhMyOpenAgent` off.
 
-![Profiles, oh-my-openagent](docs/panel-profiles.png?v=2)
+![Profiles, oh-my-openagent](docs/panel-profiles.png?v=3)
 
 ![Editing a profile](docs/panel-editor.png)
 
