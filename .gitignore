@@ -5,3 +5,9 @@ __pycache__/
 *.pyc
 # oh-my-openagent leaves this behind wherever it runs, this repo included
 .omo/
+# A symlink into the codegraph index. The marketplace validator refuses a symlink
+# anywhere in a plugin folder, and this was being kept out of git by
+# .git/info/exclude alone — which is local, and never leaves this machine.
+.codegraph
+# Exported agent-session transcripts, dropped in the repo root by hand.
+session-*.md
