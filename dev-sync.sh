@@ -9,6 +9,14 @@ SRC="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEST="$HOME/.config/omarchy/plugins/oliwier.opencode-configs"
 
 mkdir -p "$DEST"
+# rsync protects an excluded name on the receiving side as well as on the sending
+# one, so adding an --exclude does not remove what an earlier run already put
+# there: the .codegraph symlink that fails `omarchy plugin validate` would stay in
+# the plugin folder for ever. --delete-excluded would clear it, and would also
+# clear `.git` — the destination is a git checkout, which is what
+# `omarchy plugin update` fetches and fast-forwards. So the two names are removed
+# by hand instead, and nothing else on the exclude list is touched.
+rm -rf "$DEST/.codegraph" "$DEST/.omo"
 rsync -a --delete \
   --exclude '.git' --exclude '.codegraph' --exclude '.omo' \
   --exclude 'dev-sync.sh' --exclude 'mark-preview.qml' \
