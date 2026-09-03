@@ -173,12 +173,18 @@ Panel {
     // The panel is constructed once per shell session; without this, a cache built
     // after the first open stays invisible for up to catalogRefreshHours.
     root.loadCatalog()
+    // And a stale cache is refreshed in the background: the script exits
+    // immediately as `cached` when there is nothing to do, so this costs nothing
+    // when fresh — and it is the only thing that makes a new model appear
+    // without pressing `r`, on a shell that restarts more often than the timer.
+    root.maybeSyncCatalog()
     root.reload()
   }
 
   Component.onCompleted: {
     templatesFile.reload()
     root.loadCatalog()
+    root.maybeSyncCatalog()
     Qt.callLater(root.reload)
   }
 
@@ -194,6 +200,17 @@ Panel {
     root.catalogSyncTried = false
     if (!catalogSync.running) catalogSync.running = true
     reload()
+  }
+
+  // A background sync the script itself gates: a fresh cache answers `cached`
+  // without touching the network or `opencode models`, so calling this on every
+  // panel open only ever costs a run when the cache actually went stale. That
+  // is what makes a new model appear by itself: the timer alone never fires on
+  // a shell that restarts more often than catalogRefreshHours.
+  function maybeSyncCatalog() {
+    if (catalogSync.running) return
+    catalogSync.force = false
+    catalogSync.running = true
   }
 
   function clearError() { root.errorCode = ""; root.errorMessage = ""; root.errorPath = "" }
@@ -990,8 +1007,11 @@ Panel {
     catalogRead.running = true
   }
 
-  // On a timer, not on panel open: the three seconds `opencode models` costs must
-  // not sit between clicking the bar and seeing the list.
+  // The long arm of the refresh: the timer covers a shell left running for
+  // days, maybeSyncCatalog() covers every panel open and shell start. Either
+  // way the three seconds `opencode models` costs never sit between clicking
+  // the bar and seeing the list — the cached list paints first, and the sync
+  // re-reads the cache when it lands.
   Timer {
     interval: root.catalogRefreshHours * 3600 * 1000
     running: true

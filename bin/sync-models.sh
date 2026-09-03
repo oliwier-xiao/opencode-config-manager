@@ -9,6 +9,12 @@ set -uo pipefail
 PLUGIN_ID="oliwier.opencode-configs"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$PLUGIN_ID"
 TTL="${TTL:-86400}"                        # seconds; the panel passes catalogRefreshHours * 3600
+# Reachability (`opencode models`: local, a few seconds) goes stale much faster
+# than the models.dev metadata (a multi-MB download), and it is the part that
+# answers "I just connected a provider / a new model dropped — where is it?".
+# So it has its own short TTL: a panel open refreshes the reachable list every
+# few minutes in the background, while the big catalogue keeps the long one.
+REACH_TTL="${REACH_TTL:-900}"             # seconds; how often `opencode models` is re-run
 RAW="$CACHE/models.dev.json"
 ETAG="$CACHE/models.dev.etag"
 REACH="$CACHE/reachable.txt"
@@ -39,13 +45,26 @@ stage() { mktemp "${STAGE_PREFIX}XXXXXXXX" 2>/dev/null; }
 command -v jq >/dev/null 2>&1 || { echo offline; exit 1; }
 
 fresh_enough() {
-  [ -s "$OUT" ] || return 1
-  [ $(( $(date +%s) - $(stat -c %Y "$OUT" 2>/dev/null || echo 0) )) -lt "$TTL" ]
+  # $1 = file, $2 = ttl seconds. Both callers pass their own pair, so the
+  # reachable list can be refreshed without re-downloading the catalogue.
+  [ -s "$1" ] || return 1
+  [ $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )) -lt "$2" ]
 }
-if [ "${FORCE:-0}" != 1 ] && fresh_enough; then echo cached; exit 0; fi
+OUT_FRESH=0
+REACH_FRESH=0
+if [ "${FORCE:-0}" != 1 ]; then
+  fresh_enough "$OUT" "$TTL" && OUT_FRESH=1
+  fresh_enough "$REACH" "$REACH_TTL" && REACH_FRESH=1
+  if [ "$OUT_FRESH" = 1 ] && [ "$REACH_FRESH" = 1 ]; then echo cached; exit 0; fi
+fi
 
 # ---------------------------------------------------------------- metadata
 
+# When only the reachable list went stale, the catalogue on disk is still good:
+# skip both downloads and re-join against it below. The reachable refresh and
+# the join that follow are the whole of a reach-only run.
+status=cached
+if [ "$OUT_FRESH" = 0 ] || [ ! -s "$RAW" ]; then
 status=offline
 
 # opencode keeps a byte-identical mirror of models.dev; using it when newer costs no request.
@@ -83,10 +102,16 @@ if command -v curl >/dev/null 2>&1; then
 fi
 
 [ -s "$RAW" ] || { echo offline; exit 1; }
+fi # downloads skipped on a reach-only run
 
 # ---------------------------------------------------------------- reachable
 
-# Three seconds, so it runs on the catalog's refresh schedule, never on the panel-open path.
+# A few seconds, and gated by REACH_TTL above — not by the catalogue TTL — so a
+# panel open can trigger this freely: when the reachable list is still fresh the
+# script already exited as `cached` without reaching this point, and when it is
+# not, this is exactly the refresh the user is waiting for. The panel shows the
+# old list meanwhile and re-reads the cache when this lands, so nothing here
+# ever sits between clicking the bar and seeing the list.
 # Failing here is not fatal: models then show as unreachable-unknown rather than none at all.
 OPENCODE_BIN="${OPENCODE_BIN:-}"
 if [ -z "$OPENCODE_BIN" ]; then
@@ -188,6 +213,9 @@ fi
 
 if [ -s "$staged" ] && jq -e '.models | length > 0' "$staged" >/dev/null 2>&1; then
   mv -f "$staged" "$OUT"
+  # A reach-only run skipped the downloads with status=cached, but it still
+  # rebuilt the cache: report that, so the log tells a refresh from a no-op.
+  [ "$status" = cached ] && status=fresh
 else
   [ -s "$OUT" ] || { echo offline; exit 1; }
   status=stale

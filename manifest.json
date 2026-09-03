@@ -101,7 +101,7 @@
         "max": 720,
         "step": 1,
         "defaultValue": 24,
-        "description": "Hours. The list of models comes from your own opencode, so it holds exactly what your keys can reach, and is cached between panel opens. New models appear at the next refresh or when you press r."
+          "description": "Hours. The list of models comes from your own opencode, so it holds exactly what your keys can reach, and is cached between panel opens. Opening the panel refreshes a stale cache in the background — what you can reach is re-checked every few minutes — and r forces it now."
       },
       {
         "key": "showModelMeta",

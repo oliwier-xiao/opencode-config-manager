@@ -206,7 +206,9 @@ the missing one named on the row.
 ![The model picker](docs/panel-picker.png)
 
 The list comes from your own opencode, so it holds exactly what your keys can reach — connect a
-provider and its models appear here at the next refresh. Press <kbd>Tab</kbd> to search the whole
+provider and its models appear here by themselves: opening the panel refreshes a stale list in the
+background (what you can reach is re-checked every few minutes, the full catalogue on
+`catalogRefreshHours`), and <kbd>r</kbd>, middle-click or `refresh` over IPC force it now. Press <kbd>Tab</kbd> to search the whole
 models.dev catalogue instead, for when you are deciding which provider to add next. (That
 catalogue is filtered to models that can call tools and return text — the ones an agent can
 actually use.) If your shell cannot run `opencode models` at all, the picker opens on the full

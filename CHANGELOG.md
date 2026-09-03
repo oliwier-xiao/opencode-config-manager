@@ -1,5 +1,23 @@
 # Changelog
 
+## Unreleased
+
+New models (e.g. `muse-spark-1.3`) stayed invisible for days despite `opencode models`
+listing them, until the cache was deleted by hand.
+
+### Fixed
+
+- **Opening the panel refreshes a stale model cache.** The cache was only rebuilt on
+  a timer that never fired on a shell restarted more often than `catalogRefreshHours`,
+  so it sat stale until someone pressed `r`. A panel open — and a shell start — now
+  trigger a background sync, and the sync itself decides whether anything is due: a
+  fresh cache answers `cached` without touching the network or `opencode models`, so
+  the common case costs nothing and the list still paints instantly.
+- **Reachability has its own short TTL.** `opencode models` is local and takes seconds,
+  so what you can reach is re-checked every 15 minutes, while the multi-MB models.dev
+  catalogue keeps the long `catalogRefreshHours` TTL. Connecting a provider — or a new
+  model dropping — shows up within minutes, without re-downloading the catalogue.
+
 ## 1.1.2
 
 A config this plugin wrote could be refused by the software it was written for.
