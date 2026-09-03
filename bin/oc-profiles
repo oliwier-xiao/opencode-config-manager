@@ -747,14 +747,20 @@ preflight() {
   fi
 
   if [ "$logical" = "ohmy" ]; then
-    local forbidden
-    forbidden=$(printf '%s' "$payload" | jq -r \
-      --argjson fa "$OHMY_FORBIDDEN_AGENT" --argjson fc "$OHMY_FORBIDDEN_CATEGORY" '
-      [ ((.agents // {})     | to_entries[] | .value | select(type=="object") | keys[] | select(. as $k | $fa | index($k))),
-        ((.categories // {}) | to_entries[] | .value | select(type=="object") | keys[] | select(. as $k | $fc | index($k))) ]
-      | unique | .[]' 2>/dev/null | head -1)
-    [ -z "$forbidden" ] || refuse "E_FIELD_4X" \
-      "This profile sets \"$forbidden\", which oh-my-openagent drops the whole agent over."
+    # Asked separately, because the answer is half the message. Merged into one list
+    # the branch is lost, and a category refusal then explains itself as an agent —
+    # the same wrong reason the split was made to stop giving.
+    local bad_agent bad_category
+    bad_agent=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_AGENT" '
+      (.agents // {}) | to_entries[] | .value | select(type=="object")
+      | keys[] | select(. as $k | $f | index($k))' 2>/dev/null | head -1)
+    bad_category=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_CATEGORY" '
+      (.categories // {}) | to_entries[] | .value | select(type=="object")
+      | keys[] | select(. as $k | $f | index($k))' 2>/dev/null | head -1)
+    [ -z "$bad_agent" ] || refuse "E_FIELD_4X" \
+      "This profile sets \"$bad_agent\", which oh-my-openagent drops the whole agent over."
+    [ -z "$bad_category" ] || refuse "E_FIELD_4X" \
+      "This profile sets \"$bad_category\" on a category, which oh-my-openagent has no field for."
   fi
 }
 

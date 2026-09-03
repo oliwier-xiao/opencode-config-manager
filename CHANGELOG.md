@@ -49,7 +49,9 @@ the fix for it could not work, and a handful of things around it.
   it returns non-zero when any single provider is missing credentials.
 - **`categories.<name>.models` is accepted.** It is a real field on
   oh-my-openagent's category schema; only the agent schema lacks it. The refusal
-  applied to both, with a reason that was only ever true of agents.
+  applied to both, with a reason that was only ever true of agents — and a key that
+  is genuinely refused on a category now says so, rather than reporting itself as an
+  agent that was dropped.
 - **The refresh timer works at every setting.** At `catalogRefreshHours` above 596
   the interval overflowed a 32-bit int, so the timer never fired and restarted
   itself hundreds of times a second. The settings slider goes to 720.
@@ -95,10 +97,13 @@ the fix for it could not work, and a handful of things around it.
 - **The templates have a test.** Every model must still exist, a template may name no
   provider it does not declare, the free ones must be free, and none may ask a model for
   an effort it does not offer.
-- **A profile row no longer counts against a roster it has not read yet.** Before
-  `detect` answers, the built-in roster is four agents wide, so every profile in the
-  list read "2 of 6 pinned" for a moment after a shell restart, whatever it held. The
-  header already said "reading what is on disk"; the rows now say the same.
+- **A profile row no longer counts against a roster it has not read yet, and
+  re-counts once one arrives.** Before `detect` answers, the built-in roster is four
+  agents wide, so a profile holding twenty-four rows read "2 of 6 pinned"; the header
+  already said "reading what is on disk" and the rows now say the same. Worse, they
+  never corrected themselves: `setRoster` and `setShape` write globals in a `.pragma`
+  library that no binding can watch, so whatever a row was first drawn with was what
+  it kept. The panel counts those moves into a property the summaries depend on.
 - **The cost dot on a profile row is legible.** It carries the cost band as one hue at
   graded strength, and the lightest band sat at 0.30 alpha — about 2.1:1 on a dark
   theme, which is not a mark, it is a smudge. The three bands are now 0.50 / 0.65 /
@@ -110,11 +115,6 @@ A config this plugin wrote could be refused by the software it was written for.
 
 ### Fixed
 
-- **And it re-counts once the roster arrives.** `setRoster` and `setShape` write
-  globals in a `.pragma` library, which no binding can watch, so a summary drawn
-  before `detect` answered kept the built-in four-agent roster for the rest of the
-  session — "2 of 6 pinned" on a profile holding twenty-four rows. The panel now
-  counts those moves into a property the summaries depend on.
 - **oh-my-openagent entries are always written as objects.** `doctor` since 4.19
   validates `agents.*` and `categories.*` under `[opencode]` with
   `AgentOverrideConfigSchema`, which has no string branch. This plugin kept the
