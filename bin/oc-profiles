@@ -14,7 +14,7 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
-VERSION="1.1.2"
+VERSION="1.1.3"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -80,7 +80,11 @@ OPENCODE_KEYS='["model","small_model","agent"]'
 # `reasoning` and `displayName` are NOT refused — both are real fields on an agent entry.
 # `reasoning` is the current spelling of `variant`, and is what a config migrated by
 # oh-my-openagent itself will contain.
-OHMY_FORBIDDEN_FIELDS='["models","provider"]'
+OHMY_FORBIDDEN_AGENT='["models","provider"]'
+# A category is not an agent. oh-my-openagent's CategoryConfigSchema does declare
+# `models`, so refusing it there refused a key the software accepts, and said so with
+# a reason that was only ever true of agents. `provider` is on neither schema.
+OHMY_FORBIDDEN_CATEGORY='["provider"]'
 
 # ---------------------------------------------------------------- plumbing
 
@@ -733,10 +737,11 @@ preflight() {
 
   if [ "$logical" = "ohmy" ]; then
     local forbidden
-    forbidden=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_FIELDS" '
-      [ (.agents // {}), (.categories // {}) ]
-      | map(to_entries[] | .value | select(type=="object") | keys[])
-      | flatten | map(select(. as $k | $f | index($k))) | unique | .[]' 2>/dev/null | head -1)
+    forbidden=$(printf '%s' "$payload" | jq -r \
+      --argjson fa "$OHMY_FORBIDDEN_AGENT" --argjson fc "$OHMY_FORBIDDEN_CATEGORY" '
+      [ ((.agents // {})     | to_entries[] | .value | select(type=="object") | keys[] | select(. as $k | $fa | index($k))),
+        ((.categories // {}) | to_entries[] | .value | select(type=="object") | keys[] | select(. as $k | $fc | index($k))) ]
+      | unique | .[]' 2>/dev/null | head -1)
     [ -z "$forbidden" ] || refuse "E_FIELD_4X" \
       "This profile sets \"$forbidden\", which oh-my-openagent drops the whole agent over."
   fi
