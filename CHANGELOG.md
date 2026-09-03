@@ -1,5 +1,115 @@
 # Changelog
 
+## 1.2.0
+
+New models (e.g. `muse-spark-1.3`) stayed invisible for days despite `opencode models`
+listing them, until the cache was deleted by hand. Chasing that turned up the reason
+the fix for it could not work, and a handful of things around it.
+
+### Added
+
+- **Free (OpenRouter)**, an eighth template: the free set drawn from OpenRouter's
+  tier instead of OpenCode Zen, so each of the two works on a single key.
+- **A profile's left bar takes the colour of the provider it is mostly on**, the same
+  hue the model picker gives that provider. The running one keeps the accent. A list
+  of a dozen profiles groups by eye instead of reading as one grey column.
+
+### Fixed
+
+- **Opening the panel refreshes a stale model cache.** The cache was only rebuilt on
+  a timer that never fired on a shell restarted more often than `catalogRefreshHours`,
+  so it sat stale until someone pressed `r`. A panel open — and a shell start — now
+  trigger a background sync, and the sync itself decides whether anything is due: a
+  fresh cache answers `cached` without touching the network or `opencode models`, so
+  the common case costs nothing and the list still paints instantly.
+- **Reachability has its own short TTL.** `opencode models` is local and takes seconds,
+  so what you can reach is re-checked every 15 minutes, while the multi-MB models.dev
+  catalogue keeps the long `catalogRefreshHours` TTL. Connecting a provider — or a new
+  model dropping — shows up within minutes, without re-downloading the catalogue. The
+  two clocks are read off two different files, so the short cycle cannot postpone the
+  long one: measured against the file it rewrites, the catalogue would have been
+  downloaded once and then never again.
+- **A refresh asked for during a background sync is no longer dropped.** `r`,
+  middle-click and `refresh` over IPC set a flag on a process whose environment was
+  already fixed at spawn, so the forced run never happened — and syncing on every
+  panel open is what made that the usual case. The request is now held and run as
+  soon as the one in flight finishes.
+- **A model the catalogue rules out stays out.** `opencode models` lists models
+  models.dev marks as unable to call tools; those were being added back as ordinary,
+  selectable rows, which is a model that loads and then fails on an agent's first
+  tool call. Only ids models.dev has genuinely never heard of are kept now.
+- **Changing the model on an opencode agent keeps an effort it supports.** Efforts
+  were only stepped down for oh-my-openagent rows. opencode's own `AgentConfig`
+  carries one too, so an opencode agent kept the old model's effort on a new model
+  that offered none — the one config this plugin could write that loads and then fails.
+- **A broken `opencode` costs one probe, not one per panel open.** A failed or
+  timed-out `opencode models` left the reachability clock untouched, so the next
+  panel open tried again, and the next. The attempt is now recorded whether or not
+  it worked, and a non-zero exit no longer throws away a list opencode did print —
+  it returns non-zero when any single provider is missing credentials.
+- **`categories.<name>.models` is accepted.** It is a real field on
+  oh-my-openagent's category schema; only the agent schema lacks it. The refusal
+  applied to both, with a reason that was only ever true of agents. A key that is
+  genuinely refused now names the shape it was on, and says what oh-my-openagent
+  actually does with it: a plain zod object strips an unknown key rather than
+  rejecting the entry, so the agent stays and its model does not.
+- **The refresh timer works at every setting.** At `catalogRefreshHours` above 596
+  the interval overflowed a 32-bit int, so the timer never fired and restarted
+  itself hundreds of times a second. The settings slider goes to 720.
+- **The model list is built from the config folder you pointed the plugin at.**
+  The sync was the one process not told `OPENCODE_CONFIG_DIR`.
+- **`dev-sync.sh` removes what it excludes.** `--delete` leaves already-deployed
+  copies of an excluded name in place; a `.codegraph` symlink from an earlier run
+  stayed in the plugin folder and kept failing `omarchy plugin validate`.
+- **A machine that cannot reach models.dev backs off.** A failed download left the
+  catalogue still due, so every panel open spent the whole curl retry budget finding
+  that out again. The attempt is recorded; a body that arrived and turned out not to
+  be a catalogue is not treated as one, and is asked for again on the next run.
+- **The ETag is saved only once the body it belongs to has been accepted.** curl
+  wrote it in the same call that stored the response, before anything had looked at
+  it — so one bad 200 had every later request answered 304 for content that was
+  never kept. A day-old list, repairable only by deleting the cache.
+- **With no catalogue at all, the reachable list alone fills the picker.** The run
+  stopped before it ever asked opencode what it could reach, so a first run with no
+  network left the picker empty on a machine where every model worked.
+- **A deprecated model you can still reach stays in the list.** It would otherwise
+  vanish while selected in the config.
+- **The reachability probe runs the opencode on your PATH.** `~/.opencode` is where
+  the curl installer leaves a copy that never updates itself, and it was preferred —
+  so on a machine that later installed opencode from a package, the model list came
+  from an older opencode than the one being run. `bin/oc-profiles` always used PATH;
+  both halves agree now.
+- **The oh-my-openagent roster comes off the newest install present.** Directories
+  accumulate one per spec, and a lexicographic glob put an abandoned 4.13 ahead of
+  the 4.19 actually loaded — and could not match the unsuffixed directory at all.
+- **Staged files from a killed run are swept.** Every glob was scoped to the run
+  that made it, so nothing ever removed them.
+- **The IPC block in the README named a command that does not exist.** `omarchy-shell
+  ipc call <target> <method>` answered "Target not found" for all three; the wrapper
+  takes `<target> <method>`.
+
+### Changed
+
+- **Free is one key, not two.** It mixed OpenRouter and OpenCode Zen, so the set that
+  costs nothing needed both. It is now every agent on a free OpenCode Zen model, and the
+  OpenRouter half became **Free (OpenRouter)**, where the pool is wider.
+- **Budget is actually cheap.** It was led by GLM 5.2 at $0.97/M in, thirty-two times the
+  price of the model doing its reading. Nothing in it is above $0.075/M now.
+- **The templates have a test.** Every model must still exist, a template may name no
+  provider it does not declare, the free ones must be free, and none may ask a model for
+  an effort it does not offer.
+- **A profile row no longer counts against a roster it has not read yet, and
+  re-counts once one arrives.** Before `detect` answers, the built-in roster is four
+  agents wide, so a profile holding twenty-four rows read "2 of 6 pinned"; the header
+  already said "reading what is on disk" and the rows now say the same. Worse, they
+  never corrected themselves: `setRoster` and `setShape` write globals in a `.pragma`
+  library that no binding can watch, so whatever a row was first drawn with was what
+  it kept. The panel counts those moves into a property the summaries depend on.
+- **The cost dot on a profile row is legible.** It carries the cost band as one hue at
+  graded strength, and the lightest band sat at 0.30 alpha — about 2.1:1 on a dark
+  theme, which is not a mark, it is a smudge. The three bands are now 0.50 / 0.65 /
+  0.85, the same distance apart.
+
 ## 1.1.2
 
 A config this plugin wrote could be refused by the software it was written for.

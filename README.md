@@ -169,7 +169,7 @@ into the JSON, and the two merge.
 
 ## Templates
 
-Seven ready-made profiles ship with the plugin. Each one matches models to what an agent actually
+Eight ready-made profiles ship with the plugin. Each one matches models to what an agent actually
 does — the heavy thinking on a strong model, the file-scanning on a cheap fast one — so someone
 who has just connected a key does not have to pick every model by hand. Under oh-my-openagent a
 template fills eleven agents and eight categories; on plain opencode it sets the default model and
@@ -181,8 +181,9 @@ two agents. Each row says which.
 | **Gemini API** | 3.1 Pro for the thinking, Flash for everything cheap. The lowest-cost coherent config in the catalogue |
 | **GPT API** | the GPT-5 line, codex on the building agent |
 | **Daily work** | a strong brain with cheap models doing the bulk, across providers |
-| **Budget** | as cheap as it gets while still being pleasant |
-| **Free** | costs nothing. Under oh-my-openagent every agent gets two free fallbacks, because these are preview SKUs and previews get withdrawn |
+| **Budget** | the cheapest set on OpenRouter that still finishes a task, nothing above $0.075/M in |
+| **Free** | costs nothing, on one key: every agent on a free OpenCode Zen model |
+| **Free (OpenRouter)** | the same idea on the other key, out of OpenRouter's free tier |
 | **oh-my-openagent recommended** | the line-up its author publishes on [omo.dev](https://omo.dev/), model for model |
 
 ![Templates](docs/templates.png)
@@ -206,7 +207,9 @@ the missing one named on the row.
 ![The model picker](docs/panel-picker.png)
 
 The list comes from your own opencode, so it holds exactly what your keys can reach — connect a
-provider and its models appear here at the next refresh. Press <kbd>Tab</kbd> to search the whole
+provider and its models appear here by themselves: opening the panel refreshes a stale list in the
+background (what you can reach is re-checked every few minutes, the full catalogue on
+`catalogRefreshHours`), and <kbd>r</kbd>, middle-click or `refresh` over IPC force it now. Press <kbd>Tab</kbd> to search the whole
 models.dev catalogue instead, for when you are deciding which provider to add next. (That
 catalogue is filtered to models that can call tools and return text — the ones an agent can
 actually use.) If your shell cannot run `opencode models` at all, the picker opens on the full
@@ -275,11 +278,13 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-158 checks over the reader and writer, the hardening, the row model, the JSONC editor,
+256 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
-a machine that does not have it installed.
+a machine that does not have it installed, and so does the QML suite where there is no Qt6
+`qml` to run it — that one splices functions straight out of the `.qml` files and executes
+them in a real QML engine, because the writers being right says nothing about the call sites.
 
 `./dev-sync.sh` copies the working tree into `~/.config/omarchy/plugins/` and restarts the
 shell — a bar widget already mounted in a slot keeps its old instance otherwise, so a
@@ -290,9 +295,9 @@ change lands in the registry and not on the screen.
 The widget answers on the shell's IPC, under `oliwier.opencode-configs`:
 
 ```bash
-omarchy-shell ipc call oliwier.opencode-configs toggle
-omarchy-shell ipc call oliwier.opencode-configs refresh
-omarchy-shell ipc call oliwier.opencode-configs reload
+omarchy-shell oliwier.opencode-configs toggle
+omarchy-shell oliwier.opencode-configs refresh
+omarchy-shell oliwier.opencode-configs reload
 ```
 
 `open`, `close`, `show`, `hide` and `toggle` move the panel. `refresh` makes it
@@ -321,7 +326,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | `manageOpencodeJson` | on | manage `model`, `small_model` and `agent` in `opencode.json` |
 | `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — plus a file-level `fallback_models` on the legacy `oh-my-openagent.json`, where that key still exists. Off forces the plain-opencode view |
 | `keepBackups` | 10 | copies kept of each config file, oldest deleted past this. The one Undo needs is never pruned |
-| `catalogRefreshHours` | 24 | how often the model list is rebuilt |
+| `catalogRefreshHours` | 24 | how often the models.dev catalogue is re-downloaded |
 | `showModelMeta` | on | show context window and price on every model row |
 | `configDir` | — | point at a second set of config files, the way `OPENCODE_CONFIG_DIR` does. Each folder gets its own profiles |
 
@@ -381,7 +386,7 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 |---|---|
 | `~/.local/state/omarchy/opencode-configs/profiles.json` | your profiles, favourites and recents |
 | `~/.local/state/omarchy/opencode-configs/backups/` | one folder per switch, with a copy of each file |
-| `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on a timer |
+| `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on panel open when stale |
 
 Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
 the keys a profile claims.

@@ -188,5 +188,77 @@ t("a fallback follows the spelling its own entry uses", () => {
   eq(p.targets[0].payload.agents.metis.fallback_models, [{ model: "google/gemini-3.1-pro-preview", variant: "high" }]);
 });
 
+console.log("\n--- an effort never survives onto a model that has no efforts ---");
+// ProfileEditor.applyRowModel steps the effort down through Catalog.nearestVariant
+// before writing. It used to do that only for oh-my-openagent rows, so an opencode
+// agent kept the old model's effort — the one config this plugin could write that
+// loads and then fails on the first request. These assert the writer half: given
+// what nearestVariant returns, the row must end up correct either way.
+const CAT = require("path").join(REPO, "lib/Catalog.js");
+const C = require(require("path").join(__dirname, "load-model.js"))(CAT);
+const index = {
+  "anthropic/claude-opus-5":   { id: "anthropic/claude-opus-5",   variants: ["low","medium","high","max"] },
+  "openai/gpt-5-nano":         { id: "openai/gpt-5-nano",         variants: [] },
+  "google/gemini-3-flash":     { id: "google/gemini-3-flash",     variants: ["low","medium"] }
+};
+// Exactly what ProfileEditor.applyRowModel does, with the file condition removed.
+function applyRowModel(profile, row, modelId) {
+  let next = M.setRowModel(profile, row, modelId);
+  const wanted = row.variant;
+  if (wanted) next = M.setRowVariant(next, row, C.nearestVariant(index, modelId, wanted));
+  return next;
+}
+const ocAgentRow = (p) => M.rowsFor(p).filter(r => r.group === "agent" && r.key === "build")[0];
+
+t("an opencode agent loses an effort the new model does not offer", () => {
+  let p = ocProfile();
+  p = M.setRowVariant(p, ocAgentRow(p), "max");
+  eq(p.targets[0].payload.agent.build.variant, "max", "precondition");
+  p = applyRowModel(p, ocAgentRow(p), "openai/gpt-5-nano");
+  const e = p.targets[0].payload.agent.build;
+  eq(e.model, "openai/gpt-5-nano");
+  assert(e.variant === undefined, "variant survived onto a model with none: " + JSON.stringify(e));
+});
+t("an opencode agent keeps the nearest effort the new model does offer", () => {
+  let p = ocProfile();
+  p = M.setRowVariant(p, ocAgentRow(p), "max");
+  p = applyRowModel(p, ocAgentRow(p), "google/gemini-3-flash");
+  eq(p.targets[0].payload.agent.build.variant, "medium");
+});
+t("an oh-my-openagent row still steps down, as it always did", () => {
+  let p = omProfile();
+  let r = M.rowsFor(p).filter(x => x.file === "ohmy" && x.key === "librarian")[0];
+  p = M.setRowVariant(p, r, "max");
+  r = M.rowsFor(p).filter(x => x.file === "ohmy" && x.key === "librarian")[0];
+  p = applyRowModel(p, r, "openai/gpt-5-nano");
+  const e = p.targets[0].payload.agents.librarian;
+  assert(e.variant === undefined && e.reasoning === undefined,
+         "effort survived: " + JSON.stringify(e));
+});
+
+console.log("\n--- a profile takes the colour of the provider it is mostly on ---");
+const PAL = require(require("path").join(__dirname, "load-model.js"))(require("path").join(REPO, "lib/Palette.js"));
+const rowsOf = (...m) => m.map(x => ({ model: x }));
+t("a profile on one provider claims it", () => {
+  eq(PAL.dominantProvider(rowsOf("opencode/a","opencode/b","opencode/c")), "opencode");
+});
+t("a majority is enough", () => {
+  eq(PAL.dominantProvider(rowsOf("openrouter/a","openrouter/b","opencode/c")), "openrouter");
+});
+t("exactly half is enough", () => {
+  eq(PAL.dominantProvider(rowsOf("openrouter/a","openrouter/b","opencode/c","google/d")), "openrouter");
+});
+t("an even spread claims nothing", () => {
+  eq(PAL.dominantProvider(rowsOf("a/1","b/1","c/1")), "");
+});
+t("unpinned rows are not counted", () => {
+  eq(PAL.dominantProvider(rowsOf("opencode/a", null, undefined, "")), "opencode");
+});
+t("nothing pinned, nothing claimed", () => {
+  eq(PAL.dominantProvider(rowsOf(null, "")), "");
+  eq(PAL.dominantProvider([]), "");
+  eq(PAL.dominantProvider(null), "");
+});
+
 console.log("\n" + (fail ? "FAILED " + fail + " / " : "") + pass + " passed");
 process.exit(fail ? 1 : 0);

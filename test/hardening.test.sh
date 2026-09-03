@@ -163,6 +163,12 @@ is "and exits 1, not a refusal" "$rc" "1"
 echo "=== the panel does not assert what it has not read ==="
 qml_has(){ grep -qF "$2" "$REPO/$1" && ok "$3" || no "$3" "$1 no longer has: $2"; }
 qml_lacks(){ grep -qF "$2" "$REPO/$1" && no "$3" "$1 still has: $2" || ok "$3"; }
+# `grep -F` matches one line at a time, and a QML binding that spans several lines
+# cannot be asserted that way — least of all the thing worth asserting about one,
+# which is that a particular dependency sits inside a particular expression. The
+# file collapsed to a single line makes the whole binding one searchable string.
+qml_has_flat(){ tr '\n' ' ' < "$REPO/$1" | tr -s ' ' | grep -qF "$2" \
+  && ok "$3" || no "$3" "$1 no longer has: $2"; }
 
 qml_has  "Panel.qml" "Model.resolveActiveId(store)" \
          "Panel takes the active profile from resolveActiveId"
@@ -172,6 +178,45 @@ qml_has  "Panel.qml" "root.loaded && root.detected !== null" \
          "Panel is only ready once both reads have answered"
 qml_has  "Panel.qml" "ready: root.ready" \
          "and hands that down to the list"
+
+# An effort is stepped down through the catalogue before it is written. Doing that
+# for oh-my-openagent rows only left an opencode agent carrying the old model's
+# effort onto a model with none — a config that loads and then fails on the first
+# request. The writer half is covered in model.test.js; this is the call site.
+qml_has  "ProfileEditor.qml" "var wanted = root.rows[index].variant" \
+         "every row steps its effort down against the new model"
+qml_lacks "ProfileEditor.qml" 'root.rows[index].file === "ohmy" ? root.rows[index].variant' \
+         "and not just the oh-my-openagent ones"
+qml_has  "ProfileEditor.qml" "Catalog.nearestVariant(root.catalogIndex, modelId, wanted)" \
+         "through the catalogue, not by hand"
+
+# Before detect answers, Model.roster() is the built-in fallback: four opencode agents,
+# so every profile summarises as "2 of 6 pinned" whatever it really holds. The header
+# says "READING WHAT IS ON DISK" instead; the rows under it must not contradict it.
+qml_has  "ProfileList.qml" "root.ready ? Model.summary(modelData)" \
+         "a profile row waits for the roster before it counts anything"
+
+# The bar down the left of a profile row answers "which one is running" first, and
+# groups the rest by provider second. Losing either half is a silent regression.
+qml_has  "ProfileList.qml" "rowItem.isActive" \
+         "the running profile still gets the accent"
+qml_has  "ProfileList.qml" "Palette.dominantProvider(Model.rowsFor(modelData))" \
+         "and the others take the tint of the provider they are mostly on"
+# rowsFor reads the shape out of a .pragma library global, so this binding needs the
+# same counter the summary beside it reads. Without it the bar is coloured off six
+# opencode rows and never recounted: a profile whose base model is on one provider
+# and whose agents are on another wears the wrong colour for the session.
+qml_has_flat "ProfileList.qml" \
+         "readonly property string provider: { root.shapeGeneration return Palette.dominantProvider(Model.rowsFor(modelData)) }" \
+         "counted against the roster that arrived, not the one it was drawn with"
+
+# setRoster and setShape write globals in a .pragma library, which no binding can
+# watch. A row that read Model.summary() before detect answered kept the built-in
+# four-agent roster for good — "2 of 6 pinned" on a profile holding twenty-four.
+qml_has  "Panel.qml" "if (rosterMoved || shapeMoved) root.shapeGeneration++" \
+         "the panel counts every roster or shape move"
+qml_has  "ProfileList.qml" "root.shapeGeneration" \
+         "and the summaries depend on that count"
 # Model.js is a .pragma library: setShape writes a global no binding depends on,
 # and `list` beats `detect` every time, so without this the first paint keeps the
 # wrong shape until something unrelated invalidates it.

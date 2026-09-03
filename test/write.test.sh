@@ -111,7 +111,30 @@ OC_PROFILE_JSON='{"id":"mods","name":"Mods","targets":[{"file":"ohmy","shape":"o
   run "$D" save >/dev/null
 M=$(run "$D" apply mods)
 is "models is refused"           "$(jq -r .code <<<"$M")" "E_FIELD_4X"
+# The message is half the fix: a refusal that names the wrong shape is the reason
+# the check was split in the first place.
+is "and names the shape"         "$(jq -r '.message|test("on an agent")' <<<"$M")" "true"
 is "the file was left alone"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.reasoning')" "high"
+
+# A category is not an agent. oh-my-openagent's CategoryConfigSchema declares `models`;
+# AgentOverrideConfigSchema does not. Refusing it on both turned a legal key into an
+# error, with a reason that was only ever true of agents.
+OC_PROFILE_JSON='{"id":"catm","name":"CatM","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{},"categories":{"reasoning":{"model":"anthropic/claude-opus-5","models":["anthropic/claude-opus-5","google/gemini-3-flash-preview"]}}}}]}' \
+  run "$D" save >/dev/null
+CM=$(run "$D" apply catm)
+is "a category may carry models"  "$(jq -r .ok <<<"$CM")" "true"
+is "and the chain reaches the file" \
+   "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.categories.reasoning.models|length')" "2"
+
+# `provider` is on neither schema, so it stays refused on both sides.
+OC_PROFILE_JSON='{"id":"catp","name":"CatP","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{},"categories":{"reasoning":{"model":"anthropic/claude-opus-5","provider":"anthropic"}}}}]}' \
+  run "$D" save >/dev/null
+CP=$(run "$D" apply catp)
+is "a category may not carry provider" "$(jq -r .code <<<"$CP")" "E_FIELD_4X"
+is "and is told it is a category"      "$(jq -r '.message|test("on a category")' <<<"$CP")" "true"
+# Not `test("agent")`: the product is called oh-my-openagent, so the word is in every
+# message. What must not be there is the claim that this was an agent.
+is "and is not called an agent"        "$(jq -r '.message|test("on an agent")' <<<"$CP")" "false"
 
 echo "=== the [opencode] block never gets a file-level fallback_models ==="
 OC_PROFILE_JSON='{"id":"fb","name":"Fb","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories","fallback_models"],"payload":{"agents":{},"categories":{},"fallback_models":[{"model":"google/gemini-3-flash-preview"}]}}]}' \

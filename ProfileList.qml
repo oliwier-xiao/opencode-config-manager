@@ -18,6 +18,11 @@ Item {
   // says about the running config is a claim about disk, and before the second half
   // lands the panel does not yet know enough to make one.
   property bool ready: true
+  // Model.js keeps the roster and the shape in globals a binding cannot watch, so
+  // the panel counts the moves and every summary below reads the count. Without it
+  // a row keeps whatever it was first drawn with, which before detect answers is
+  // the built-in four-agent roster.
+  property int shapeGeneration: 0
   property bool drift: false
   property bool busy: false
   property string shapeName: ""
@@ -116,6 +121,7 @@ Item {
         // say what is actually happening instead of asserting the worst case.
         if (!root.ready) return "READING WHAT IS ON DISK"
         if (!root.activeProfile) return "NO PROFILE MATCHES WHAT IS ON DISK"
+        root.shapeGeneration    // same dependency: the count is read off the roster
         return Model.plain(Model.summary(root.activeProfile).toUpperCase())
       }
       detail: root.shapeName
@@ -447,8 +453,25 @@ Item {
         anchors.leftMargin: Style.space(2)
         width: Style.space(3)
         radius: width / 2
-        color: rowItem.isActive ? root.accent : "transparent"
-        opacity: root.drift && rowItem.isActive ? 0.45 : 1
+        // Running is still the accent, at full strength. The rest carry the tint of
+        // the provider they are mostly on — the same hue the model picker gives that
+        // provider — so a list of a dozen profiles groups by eye instead of reading
+        // as one grey column. A profile on no single provider gets the muted
+        // fallback, which is what the bar looked like before any of this.
+        // Counted off rowsFor, which reads the shape out of a .pragma library global —
+        // so this needs the same dependency the summary beside it has. Without it the
+        // bar keeps the answer it was drawn with, and before detect answers that is
+        // six opencode rows rather than the twenty-four the profile holds: a profile
+        // whose base model is on one provider and whose agents are on another takes
+        // the base model's colour and never lets go of it.
+        readonly property string provider: {
+          root.shapeGeneration
+          return Palette.dominantProvider(Model.rowsFor(modelData))
+        }
+        color: rowItem.isActive
+          ? root.accent
+          : Palette.providerTint(provider, root.accent, Color.popups.background, root.veryMuted)
+        opacity: rowItem.isActive ? (root.drift ? 0.45 : 1) : 0.7
 
         Behavior on opacity { NumberAnimation { duration: 160; easing.type: Easing.OutCubic } }
       }
@@ -505,7 +528,14 @@ Item {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: Model.summary(modelData)
+          // The header above already refuses to guess before the reads are in; the
+          // rows under it were asserting a count off the built-in roster, which is
+          // four agents wide. That is where "2 of 6 pinned" came from on a profile
+          // that has twenty-four rows the moment detect answers.
+          text: {
+            root.shapeGeneration    // a dependency, so this re-reads when the roster moves
+            return root.ready ? Model.summary(modelData) : "reading what is on disk"
+          }
           color: root.muted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

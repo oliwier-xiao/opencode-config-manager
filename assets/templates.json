@@ -5,10 +5,9 @@
       "id": "free",
       "name": "Free",
       "shortName": "FR",
-      "vendor": "mixed",
-      "description": "Costs nothing. Every agent is pinned to a free model and given two free fallbacks, because these are preview SKUs and previews get withdrawn without notice.",
+      "vendor": "opencode",
+      "description": "Every agent on a free OpenCode Zen model. Muse Spark thinks, Nemotron Ultra builds, Ling reads. One key, and two fallbacks each.",
       "requires": [
-        "openrouter",
         "opencode"
       ],
       "shapes": [
@@ -16,11 +15,257 @@
         "ohmy"
       ],
       "opencode": {
-        "model": "openrouter/z-ai/glm-5.2:free",
+        "model": "opencode/muse-spark-1.3-contributor-free",
+        "small_model": "opencode/nemotron-3.5-lightning-free",
+        "agent": {
+          "plan": {
+            "model": "opencode/muse-spark-1.3-contributor-free"
+          },
+          "build": {
+            "model": "opencode/nemotron-3-ultra-free"
+          }
+        }
+      },
+      "ohmy": {
+        "agents": {
+          "sisyphus": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              },
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "high"
+              }
+            ]
+          },
+          "hephaestus": {
+            "model": "opencode/nemotron-3-ultra-free",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.3-contributor-free",
+                "variant": "medium"
+              },
+              {
+                "model": "opencode/big-pickle"
+              }
+            ]
+          },
+          "prometheus": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "high"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "atlas": {
+            "model": "opencode/nemotron-3-ultra-free",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "medium"
+              },
+              {
+                "model": "opencode/big-pickle"
+              }
+            ]
+          },
+          "oracle": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "xhigh"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "metis": {
+            "model": "opencode/muse-spark-1.2-contributor-free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.3-contributor-free",
+                "variant": "high"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "momus": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "high"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "librarian": {
+            "model": "opencode/ling-3.0-flash-fin-free",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3.5-lightning-free"
+              },
+              {
+                "model": "opencode/mimo-v2.5-free"
+              }
+            ]
+          },
+          "explore": {
+            "model": "opencode/nemotron-3.5-lightning-free",
+            "fallback_models": [
+              {
+                "model": "opencode/ling-3.0-flash-fin-free"
+              },
+              {
+                "model": "opencode/big-pickle"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "opencode/mimo-v2.5-free",
+            "fallback_models": [
+              {
+                "model": "opencode/big-pickle"
+              },
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "opencode/nemotron-3-ultra-free",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "medium"
+              },
+              {
+                "model": "opencode/big-pickle"
+              }
+            ]
+          }
+        },
+        "categories": {
+          "visual-engineering": {
+            "model": "opencode/mimo-v2.5-free",
+            "fallback_models": [
+              {
+                "model": "opencode/big-pickle"
+              }
+            ]
+          },
+          "artistry": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "high"
+              }
+            ]
+          },
+          "ultrabrain": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "xhigh",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.2-contributor-free",
+                "variant": "xhigh"
+              }
+            ]
+          },
+          "deep": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          },
+          "quick": {
+            "model": "opencode/nemotron-3.5-lightning-free",
+            "fallback_models": [
+              {
+                "model": "opencode/ling-3.0-flash-fin-free"
+              }
+            ]
+          },
+          "writing": {
+            "model": "opencode/muse-spark-1.2-contributor-free",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "opencode/muse-spark-1.3-contributor-free",
+                "variant": "medium"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "opencode/ling-3.0-flash-fin-free",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3.5-lightning-free"
+              }
+            ]
+          },
+          "unspecified-high": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "opencode/nemotron-3-ultra-free"
+              }
+            ]
+          }
+        },
+        "fallback_models": [
+          {
+            "model": "opencode/nemotron-3-ultra-free"
+          },
+          {
+            "model": "opencode/muse-spark-1.2-contributor-free"
+          }
+        ]
+      }
+    },
+    {
+      "id": "free-openrouter",
+      "name": "Free (OpenRouter)",
+      "shortName": "FO",
+      "vendor": "openrouter",
+      "description": "The same on OpenRouter's free tier. Inkling thinks and is the one free model here with every effort, MiniMax M3 builds, Ling reads.",
+      "requires": [
+        "openrouter"
+      ],
+      "shapes": [
+        "opencode",
+        "ohmy"
+      ],
+      "opencode": {
+        "model": "openrouter/thinkingmachines/inkling:free",
         "small_model": "openrouter/nvidia/nemotron-3.5-lightning:free",
         "agent": {
           "plan": {
-            "model": "openrouter/z-ai/glm-5.2:free"
+            "model": "openrouter/thinkingmachines/inkling:free"
           },
           "build": {
             "model": "openrouter/minimax/minimax-m3:free"
@@ -30,22 +275,11 @@
       "ohmy": {
         "agents": {
           "sisyphus": {
-            "model": "openrouter/z-ai/glm-5.2:free",
+            "model": "openrouter/thinkingmachines/inkling:free",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "opencode/nemotron-3-ultra-free"
-              },
-              {
                 "model": "openrouter/minimax/minimax-m3:free"
-              }
-            ]
-          },
-          "hephaestus": {
-            "model": "openrouter/minimax/minimax-m3:free",
-            "fallback_models": [
-              {
-                "model": "opencode/nemotron-3-ultra-free"
               },
               {
                 "model": "openrouter/z-ai/glm-5.2:free",
@@ -53,16 +287,29 @@
               }
             ]
           },
+          "hephaestus": {
+            "model": "openrouter/minimax/minimax-m3:free",
+            "fallback_models": [
+              {
+                "model": "openrouter/thinkingmachines/inkling-small:free",
+                "variant": "medium"
+              },
+              {
+                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
+              }
+            ]
+          },
           "prometheus": {
-            "model": "openrouter/z-ai/glm-5.2:free",
+            "model": "openrouter/thinkingmachines/inkling:free",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/thinkingmachines/inkling:free",
+                "model": "openrouter/z-ai/glm-5.2:free",
                 "variant": "high"
               },
               {
-                "model": "opencode/nemotron-3-ultra-free"
+                "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
+                "variant": "high"
               }
             ]
           },
@@ -70,10 +317,11 @@
             "model": "openrouter/minimax/minimax-m3:free",
             "fallback_models": [
               {
-                "model": "opencode/nemotron-3-ultra-free"
+                "model": "openrouter/thinkingmachines/inkling-small:free",
+                "variant": "medium"
               },
               {
-                "model": "openrouter/minimax/minimax-m2.7:free"
+                "model": "openrouter/dots-studio/dots-3-note-preview:free"
               }
             ]
           },
@@ -82,24 +330,26 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5.2:free",
-                "variant": "xhigh"
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "max"
               },
               {
-                "model": "openrouter/thinkingmachines/inkling:free",
-                "variant": "high"
+                "model": "openrouter/z-ai/glm-5.2:free",
+                "variant": "xhigh"
               }
             ]
           },
           "metis": {
-            "model": "openrouter/thinkingmachines/inkling:free",
+            "model": "openrouter/thinkingmachines/inkling-small:free",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3:free"
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "high"
               },
               {
-                "model": "opencode/nemotron-3-ultra-free"
+                "model": "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
+                "variant": "medium"
               }
             ]
           },
@@ -108,71 +358,69 @@
             "variant": "xhigh",
             "fallback_models": [
               {
-                "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-                "variant": "high"
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "max"
               },
               {
-                "model": "openrouter/thinkingmachines/inkling:free",
+                "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
                 "variant": "high"
               }
             ]
           },
           "librarian": {
-            "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
-            "fallback_models": [
-              {
-                "model": "opencode/nemotron-3.5-lightning-free"
-              },
-              {
-                "model": "openrouter/minimax/minimax-m3:free"
-              }
-            ]
-          },
-          "explore": {
-            "model": "opencode/nemotron-3.5-lightning-free",
+            "model": "openrouter/inclusionai/ling-3.0-flash-fin:free",
             "fallback_models": [
               {
                 "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
               },
               {
-                "model": "openrouter/minimax/minimax-m2.7:free"
-              }
-            ]
-          },
-          "multimodal-looker": {
-            "model": "openrouter/minimax/minimax-m3:free",
-            "fallback_models": [
-              {
-                "model": "opencode/mimo-v2.5-free"
-              },
-              {
-                "model": "openrouter/thinkingmachines/inkling:free",
+                "model": "openrouter/nvidia/nemotron-3-super-120b-a12b:free",
                 "variant": "low"
               }
             ]
           },
-          "sisyphus-junior": {
-            "model": "openrouter/minimax/minimax-m2.7:free",
+          "explore": {
+            "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
             "fallback_models": [
               {
-                "model": "opencode/big-pickle"
+                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
               },
               {
+                "model": "openrouter/thinkingmachines/inkling-small:free",
+                "variant": "low"
+              }
+            ]
+          },
+          "multimodal-looker": {
+            "model": "openrouter/google/gemma-4-31b-it:free",
+            "fallback_models": [
+              {
                 "model": "openrouter/minimax/minimax-m3:free"
+              },
+              {
+                "model": "openrouter/dots-studio/dots-3-note-preview:free"
+              }
+            ]
+          },
+          "sisyphus-junior": {
+            "model": "openrouter/minimax/minimax-m3:free",
+            "fallback_models": [
+              {
+                "model": "openrouter/thinkingmachines/inkling-small:free",
+                "variant": "low"
+              },
+              {
+                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
               }
             ]
           }
         },
         "categories": {
           "visual-engineering": {
-            "model": "openrouter/thinkingmachines/inkling:free",
-            "variant": "high",
+            "model": "openrouter/minimax/minimax-m3:free",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3:free"
-              },
-              {
-                "model": "opencode/mimo-v2.5-free"
+                "model": "openrouter/google/gemma-4-31b-it:free"
               }
             ]
           },
@@ -181,23 +429,18 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/dots-studio/dots-3-note-preview:free"
-              },
-              {
-                "model": "openrouter/minimax/minimax-m3:free"
+                "model": "openrouter/thinkingmachines/inkling-small:free",
+                "variant": "high"
               }
             ]
           },
           "ultrabrain": {
-            "model": "openrouter/z-ai/glm-5.2:free",
-            "variant": "xhigh",
+            "model": "openrouter/thinkingmachines/inkling:free",
+            "variant": "max",
             "fallback_models": [
               {
-                "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
-                "variant": "high"
-              },
-              {
-                "model": "opencode/nemotron-3-ultra-free"
+                "model": "openrouter/z-ai/glm-5.2:free",
+                "variant": "xhigh"
               }
             ]
           },
@@ -206,10 +449,7 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "opencode/nemotron-3-ultra-free"
-              },
-              {
-                "model": "openrouter/z-ai/glm-5.2:free",
+                "model": "openrouter/thinkingmachines/inkling:free",
                 "variant": "high"
               }
             ]
@@ -218,45 +458,34 @@
             "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
             "fallback_models": [
               {
-                "model": "opencode/nemotron-3.5-lightning-free"
-              },
-              {
-                "model": "openrouter/liquid/lfm-2.5-2.6b:free"
+                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
               }
             ]
           },
           "writing": {
-            "model": "openrouter/thinkingmachines/inkling:free",
+            "model": "openrouter/thinkingmachines/inkling-small:free",
             "variant": "medium",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3:free"
-              },
-              {
-                "model": "openrouter/google/gemma-4-31b-it:free"
+                "model": "openrouter/thinkingmachines/inkling:free",
+                "variant": "medium"
               }
             ]
           },
           "unspecified-low": {
-            "model": "openrouter/minimax/minimax-m2.7:free",
+            "model": "openrouter/inclusionai/ling-3.0-flash-fin:free",
             "fallback_models": [
-              {
-                "model": "opencode/big-pickle"
-              },
               {
                 "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
               }
             ]
           },
           "unspecified-high": {
-            "model": "openrouter/z-ai/glm-5.2:free",
+            "model": "openrouter/thinkingmachines/inkling:free",
             "variant": "high",
             "fallback_models": [
               {
                 "model": "openrouter/minimax/minimax-m3:free"
-              },
-              {
-                "model": "opencode/nemotron-3-ultra-free"
               }
             ]
           }
@@ -266,7 +495,7 @@
             "model": "openrouter/minimax/minimax-m3:free"
           },
           {
-            "model": "opencode/nemotron-3-ultra-free"
+            "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
           }
         ]
       }
@@ -276,7 +505,7 @@
       "name": "Budget",
       "shortName": "BG",
       "vendor": "mixed",
-      "description": "The cheapest set that still finishes a real task. GLM 5.2 does the thinking, MiniMax M3 does the work, DeepSeek Flash does the reading.",
+      "description": "The cheapest set on OpenRouter that still finishes a task. Ling reads at $0.021/M, DeepSeek Flash builds at $0.065, GLM 5.3 Flash thinks at $0.075.",
       "requires": [
         "openrouter"
       ],
@@ -285,80 +514,111 @@
         "ohmy"
       ],
       "opencode": {
-        "model": "openrouter/z-ai/glm-5.2",
-        "small_model": "openrouter/deepseek/deepseek-v4-flash-0731",
+        "model": "openrouter/z-ai/glm-5.3-flash",
+        "small_model": "openrouter/inclusionai/ling-3.0-flash",
         "agent": {
           "plan": {
-            "model": "openrouter/z-ai/glm-5.2"
+            "model": "openrouter/z-ai/glm-5.3-flash"
           },
           "build": {
-            "model": "openrouter/z-ai/glm-5"
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731"
           }
         }
       },
       "ohmy": {
         "agents": {
           "sisyphus": {
-            "model": "openrouter/z-ai/glm-5.2",
+            "model": "openrouter/z-ai/glm-5.3-flash",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5"
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "high"
               },
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/openai/gpt-oss-120b",
+                "variant": "high"
               }
             ]
           },
           "hephaestus": {
-            "model": "openrouter/minimax/minimax-m3",
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5"
+                "model": "openrouter/z-ai/glm-5.3-flash",
+                "variant": "high"
+              },
+              {
+                "model": "openrouter/qwen/qwen3.7-flash"
               }
             ]
           },
           "prometheus": {
-            "model": "openrouter/z-ai/glm-5.2",
+            "model": "openrouter/z-ai/glm-5.3-flash",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/openai/gpt-oss-120b",
+                "variant": "high"
+              },
+              {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "high"
               }
             ]
           },
           "atlas": {
-            "model": "openrouter/z-ai/glm-5",
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "variant": "low",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/qwen/qwen3.7-flash"
+              },
+              {
+                "model": "openrouter/inclusionai/ling-3.0-flash"
               }
             ]
           },
           "oracle": {
-            "model": "openrouter/z-ai/glm-5.2",
-            "variant": "xhigh",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "variant": "max",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "max"
+              },
+              {
+                "model": "openrouter/openai/gpt-oss-120b",
+                "variant": "high"
               }
             ]
           },
           "metis": {
-            "model": "openrouter/z-ai/glm-5",
+            "model": "openrouter/openai/gpt-oss-120b",
+            "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5.2",
+                "model": "openrouter/z-ai/glm-5.3-flash",
+                "variant": "high"
+              },
+              {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
                 "variant": "high"
               }
             ]
           },
           "momus": {
-            "model": "openrouter/z-ai/glm-5.2",
-            "variant": "xhigh",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "variant": "max",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5"
+                "model": "openrouter/openai/gpt-oss-120b",
+                "variant": "high"
+              },
+              {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "high"
               }
             ]
           },
@@ -366,17 +626,23 @@
             "model": "openrouter/qwen/qwen3.7-flash",
             "fallback_models": [
               {
+                "model": "openrouter/inclusionai/ling-3.0-flash"
+              },
+              {
                 "model": "openrouter/deepseek/deepseek-v4-flash-0731",
                 "variant": "low"
               }
             ]
           },
           "explore": {
-            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
-            "variant": "low",
+            "model": "openrouter/inclusionai/ling-3.0-flash",
             "fallback_models": [
               {
                 "model": "openrouter/qwen/qwen3.7-flash"
+              },
+              {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "low"
               }
             ]
           },
@@ -384,58 +650,66 @@
             "model": "openrouter/qwen/qwen3.7-flash",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/z-ai/glm-5.3-flash",
+                "variant": "low"
               }
             ]
           },
           "sisyphus-junior": {
-            "model": "openrouter/minimax/minimax-m3",
+            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+            "variant": "low",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5"
+                "model": "openrouter/qwen/qwen3.7-flash"
+              },
+              {
+                "model": "openrouter/inclusionai/ling-3.0-flash"
               }
             ]
           }
         },
         "categories": {
           "visual-engineering": {
-            "model": "openrouter/z-ai/glm-5.2",
-            "variant": "high",
+            "model": "openrouter/qwen/qwen3.7-flash",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/z-ai/glm-5.3-flash",
+                "variant": "low"
               }
             ]
           },
           "artistry": {
-            "model": "openrouter/minimax/minimax-m3",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5.2",
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
                 "variant": "high"
               }
             ]
           },
           "ultrabrain": {
-            "model": "openrouter/z-ai/glm-5.2",
-            "variant": "xhigh",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "variant": "max",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5"
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "max"
               }
             ]
           },
           "deep": {
-            "model": "openrouter/z-ai/glm-5",
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3"
+                "model": "openrouter/openai/gpt-oss-120b",
+                "variant": "high"
               }
             ]
           },
           "quick": {
-            "model": "openrouter/deepseek/deepseek-v4-flash-0731",
-            "variant": "low",
+            "model": "openrouter/inclusionai/ling-3.0-flash",
             "fallback_models": [
               {
                 "model": "openrouter/qwen/qwen3.7-flash"
@@ -443,37 +717,40 @@
             ]
           },
           "writing": {
-            "model": "openrouter/minimax/minimax-m3",
+            "model": "openrouter/openai/gpt-oss-120b",
+            "variant": "medium",
+            "fallback_models": [
+              {
+                "model": "openrouter/z-ai/glm-5.3-flash",
+                "variant": "low"
+              }
+            ]
+          },
+          "unspecified-low": {
+            "model": "openrouter/inclusionai/ling-3.0-flash",
             "fallback_models": [
               {
                 "model": "openrouter/qwen/qwen3.7-flash"
               }
             ]
           },
-          "unspecified-low": {
-            "model": "openrouter/qwen/qwen3.7-flash",
-            "fallback_models": [
-              {
-                "model": "openrouter/minimax/minimax-m3"
-              }
-            ]
-          },
           "unspecified-high": {
-            "model": "openrouter/z-ai/glm-5.2",
+            "model": "openrouter/z-ai/glm-5.3-flash",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5"
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "high"
               }
             ]
           }
         },
         "fallback_models": [
           {
-            "model": "openrouter/z-ai/glm-5"
+            "model": "openrouter/qwen/qwen3.7-flash"
           },
           {
-            "model": "openrouter/minimax/minimax-m3"
+            "model": "openrouter/inclusionai/ling-3.0-flash"
           }
         ]
       }
