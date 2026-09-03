@@ -175,18 +175,14 @@ who has just connected a key does not have to pick every model by hand. Under oh
 template fills eleven agents and eight categories; on plain opencode it sets the default model and
 two agents. Each row says which.
 
-The two free sets are deliberately kept apart by provider, so each one works with a single key
-rather than needing both. Under oh-my-openagent every agent in them gets two fallbacks, because
-free SKUs are rate limited before they are withdrawn.
-
 | | |
 |---|---|
 | **Claude API** | Opus plans, Sonnet builds, Haiku looks things up |
 | **Gemini API** | 3.1 Pro for the thinking, Flash for everything cheap. The lowest-cost coherent config in the catalogue |
 | **GPT API** | the GPT-5 line, codex on the building agent |
 | **Daily work** | a strong brain with cheap models doing the bulk, across providers |
-| **Budget** | the cheapest set on OpenRouter that still finishes a task, and nothing in it costs more than $0.075/M in |
-| **Free** | costs nothing, and asks for one key: every agent on a free OpenCode Zen model |
+| **Budget** | the cheapest set on OpenRouter that still finishes a task, nothing above $0.075/M in |
+| **Free** | costs nothing, on one key: every agent on a free OpenCode Zen model |
 | **Free (OpenRouter)** | the same idea on the other key, out of OpenRouter's free tier |
 | **oh-my-openagent recommended** | the line-up its author publishes on [omo.dev](https://omo.dev/), model for model |
 

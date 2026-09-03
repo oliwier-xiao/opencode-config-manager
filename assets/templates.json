@@ -6,7 +6,7 @@
       "name": "Free",
       "shortName": "FR",
       "vendor": "opencode",
-      "description": "Costs nothing, and asks for one key. Every agent runs on a free model from OpenCode Zen, so this is the set that works with nothing but an OpenCode account. Muse Spark does the thinking — it is the only free model here that takes an effort — and Nemotron Ultra does the building. These are preview SKUs and previews get withdrawn, so every agent has two fallbacks behind it.",
+      "description": "Every agent on a free OpenCode Zen model. Muse Spark thinks, Nemotron Ultra builds, Ling reads. One key, and two fallbacks each.",
       "requires": [
         "opencode"
       ],
@@ -252,7 +252,7 @@
       "name": "Free (OpenRouter)",
       "shortName": "FO",
       "vendor": "openrouter",
-      "description": "Costs nothing, on the other key. The same idea as Free, drawn from OpenRouter's free tier instead of OpenCode Zen: a wider pool, longer context on the reading agents, and Inkling as the one free model here that takes the full range of efforts. Free tiers are rate limited before they are withdrawn, so every agent falls back onto a different vendor rather than a different size of the same one.",
+      "description": "The same on OpenRouter's free tier. Inkling thinks and is the one free model here with every effort, MiniMax M3 builds, Ling reads.",
       "requires": [
         "openrouter"
       ],
@@ -505,7 +505,7 @@
       "name": "Budget",
       "shortName": "BG",
       "vendor": "mixed",
-      "description": "The cheapest set on OpenRouter that still finishes a real task, sorted by what it costs: Ling 3.0 Flash at $0.021/M reads, Qwen3.7 Flash at $0.03 searches, GPT-OSS 120B at $0.037 reasons, DeepSeek V4 Flash at $0.065 builds, and GLM 5.3 Flash at $0.075 thinks. The set it replaces was led by GLM 5.2 at $0.97/M — thirty-two times the price of the model doing the reading here.",
+      "description": "The cheapest set on OpenRouter that still finishes a task. Ling reads at $0.021/M, DeepSeek Flash builds at $0.065, GLM 5.3 Flash thinks at $0.075.",
       "requires": [
         "openrouter"
       ],
