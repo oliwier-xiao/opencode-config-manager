@@ -278,7 +278,7 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-241 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+242 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on

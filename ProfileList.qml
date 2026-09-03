@@ -505,7 +505,11 @@ Item {
         Text {
           width: parent.width
           textFormat: Text.PlainText
-          text: Model.summary(modelData)
+          // The header above already refuses to guess before the reads are in; the
+          // rows under it were asserting a count off the built-in roster, which is
+          // four agents wide. That is where "2 of 6 pinned" came from on a profile
+          // that has twenty-four rows the moment detect answers.
+          text: root.ready ? Model.summary(modelData) : "reading what is on disk"
           color: root.muted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

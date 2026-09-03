@@ -183,6 +183,12 @@ qml_lacks "ProfileEditor.qml" 'root.rows[index].file === "ohmy" ? root.rows[inde
          "and not just the oh-my-openagent ones"
 qml_has  "ProfileEditor.qml" "Catalog.nearestVariant(root.catalogIndex, modelId, wanted)" \
          "through the catalogue, not by hand"
+
+# Before detect answers, Model.roster() is the built-in fallback: four opencode agents,
+# so every profile summarises as "2 of 6 pinned" whatever it really holds. The header
+# says "READING WHAT IS ON DISK" instead; the rows under it must not contradict it.
+qml_has  "ProfileList.qml" "root.ready ? Model.summary(modelData)" \
+         "a profile row waits for the roster before it counts anything"
 # Model.js is a .pragma library: setShape writes a global no binding depends on,
 # and `list` beats `detect` every time, so without this the first paint keeps the
 # wrong shape until something unrelated invalidates it.

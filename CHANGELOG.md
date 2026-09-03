@@ -86,6 +86,10 @@ listing them, until the cache was deleted by hand.
 - **The templates have a test.** Every model must still exist, a template may name no
   provider it does not declare, the free ones must be free, and none may ask a model for
   an effort it does not offer.
+- **A profile row no longer counts against a roster it has not read yet.** Before
+  `detect` answers, the built-in roster is four agents wide, so every profile in the
+  list read "2 of 6 pinned" for a moment after a shell restart, whatever it held. The
+  header already said "reading what is on disk"; the rows now say the same.
 
 ## 1.1.2
 
