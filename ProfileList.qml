@@ -18,6 +18,11 @@ Item {
   // says about the running config is a claim about disk, and before the second half
   // lands the panel does not yet know enough to make one.
   property bool ready: true
+  // Model.js keeps the roster and the shape in globals a binding cannot watch, so
+  // the panel counts the moves and every summary below reads the count. Without it
+  // a row keeps whatever it was first drawn with, which before detect answers is
+  // the built-in four-agent roster.
+  property int shapeGeneration: 0
   property bool drift: false
   property bool busy: false
   property string shapeName: ""
@@ -116,6 +121,7 @@ Item {
         // say what is actually happening instead of asserting the worst case.
         if (!root.ready) return "READING WHAT IS ON DISK"
         if (!root.activeProfile) return "NO PROFILE MATCHES WHAT IS ON DISK"
+        root.shapeGeneration    // same dependency: the count is read off the roster
         return Model.plain(Model.summary(root.activeProfile).toUpperCase())
       }
       detail: root.shapeName
@@ -518,7 +524,10 @@ Item {
           // rows under it were asserting a count off the built-in roster, which is
           // four agents wide. That is where "2 of 6 pinned" came from on a profile
           // that has twenty-four rows the moment detect answers.
-          text: root.ready ? Model.summary(modelData) : "reading what is on disk"
+          text: {
+            root.shapeGeneration    // a dependency, so this re-reads when the roster moves
+            return root.ready ? Model.summary(modelData) : "reading what is on disk"
+          }
           color: root.muted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

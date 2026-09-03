@@ -196,6 +196,14 @@ qml_has  "ProfileList.qml" "rowItem.isActive" \
          "the running profile still gets the accent"
 qml_has  "ProfileList.qml" "Palette.dominantProvider(Model.rowsFor(modelData))" \
          "and the others take the tint of the provider they are mostly on"
+
+# setRoster and setShape write globals in a .pragma library, which no binding can
+# watch. A row that read Model.summary() before detect answered kept the built-in
+# four-agent roster for good — "2 of 6 pinned" on a profile holding twenty-four.
+qml_has  "Panel.qml" "if (rosterMoved || shapeMoved) root.shapeGeneration++" \
+         "the panel counts every roster or shape move"
+qml_has  "ProfileList.qml" "root.shapeGeneration" \
+         "and the summaries depend on that count"
 # Model.js is a .pragma library: setShape writes a global no binding depends on,
 # and `list` beats `detect` every time, so without this the first paint keeps the
 # wrong shape until something unrelated invalidates it.

@@ -101,6 +101,11 @@ A config this plugin wrote could be refused by the software it was written for.
 
 ### Fixed
 
+- **And it re-counts once the roster arrives.** `setRoster` and `setShape` write
+  globals in a `.pragma` library, which no binding can watch, so a summary drawn
+  before `detect` answered kept the built-in four-agent roster for the rest of the
+  session — "2 of 6 pinned" on a profile holding twenty-four rows. The panel now
+  counts those moves into a property the summaries depend on.
 - **oh-my-openagent entries are always written as objects.** `doctor` since 4.19
   validates `agents.*` and `categories.*` under `[opencode]` with
   `AgentOverrideConfigSchema`, which has no string branch. This plugin kept the

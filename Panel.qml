@@ -74,6 +74,9 @@ Panel {
   property var detected: null
   property var catalog: Catalog.empty()
   property var catalogIndex: ({})
+  // Bumped whenever Model's roster or shape moves. Model.js is a .pragma library:
+  // those live in globals that no binding can watch, so this is the watchable thing.
+  property int shapeGeneration: 0
   property bool catalogSyncTried: false
   // An `r` pressed while a background sync is already in flight. It cannot be
   // handed to that run — Quickshell fixes a Process's environment at spawn, so
@@ -606,6 +609,7 @@ Panel {
         profiles: root.profiles
         activeProfileId: root.activeProfileId
         ready: root.ready
+        shapeGeneration: root.shapeGeneration
         drift: root.drift
         busy: root.busy
         catalogIndex: root.catalogIndex
@@ -860,6 +864,13 @@ Panel {
         // with. `list` almost always lands first, so that shape is the wrong one.
         // Re-seating the store is the dependency all of them do share, and it is
         // only paid when something actually moved.
+        // And a counter that IS a QML property, so a binding can depend on it. The
+        // re-seat below only reaches rows drawn from the store, and only once the
+        // store has arrived; anything that reads Model.roster() or Model.shape()
+        // directly — every row summary in the list — had no way to know it had gone
+        // stale. That is a profile reading "2 of 6 pinned" against the built-in
+        // roster while holding twenty-four rows.
+        if (rosterMoved || shapeMoved) root.shapeGeneration++
         if ((rosterMoved || shapeMoved) && root.loaded) root.store = Model.clone(root.store)
         // A config that will not parse is the one state where nothing else in
         // the panel means anything, so it outranks every other message.
