@@ -1,9 +1,18 @@
 # Changelog
 
-## 1.1.3
+## 1.2.0
 
 New models (e.g. `muse-spark-1.3`) stayed invisible for days despite `opencode models`
-listing them, until the cache was deleted by hand.
+listing them, until the cache was deleted by hand. Chasing that turned up the reason
+the fix for it could not work, and a handful of things around it.
+
+### Added
+
+- **Free (OpenRouter)**, an eighth template: the free set drawn from OpenRouter's
+  tier instead of OpenCode Zen, so each of the two works on a single key.
+- **A profile's left bar takes the colour of the provider it is mostly on**, the same
+  hue the model picker gives that provider. The running one keeps the accent. A list
+  of a dozen profiles groups by eye instead of reading as one grey column.
 
 ### Fixed
 
@@ -78,10 +87,6 @@ listing them, until the cache was deleted by hand.
 
 ### Changed
 
-- **A profile's left bar takes the colour of the provider it is mostly on.** The
-  running one keeps the accent; the rest were transparent, so a long list read as one
-  grey column. Same hue the model picker gives that provider, and a profile spread
-  evenly across providers stays neutral rather than picking one.
 - **Free is one key, not two.** It mixed OpenRouter and OpenCode Zen, so the set that
   costs nothing needed both. It is now every agent on a free OpenCode Zen model, and the
   OpenRouter half became **Free (OpenRouter)**, where the pool is wider.
@@ -94,6 +99,10 @@ listing them, until the cache was deleted by hand.
   `detect` answers, the built-in roster is four agents wide, so every profile in the
   list read "2 of 6 pinned" for a moment after a shell restart, whatever it held. The
   header already said "reading what is on disk"; the rows now say the same.
+- **The cost dot on a profile row is legible.** It carries the cost band as one hue at
+  graded strength, and the lightest band sat at 0.30 alpha — about 2.1:1 on a dark
+  theme, which is not a mark, it is a smudge. The three bands are now 0.50 / 0.65 /
+  0.85, the same distance apart.
 
 ## 1.1.2
 
