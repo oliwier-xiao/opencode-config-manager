@@ -64,16 +64,20 @@ cp "$REPO/test/fixtures/omo.jsonc" "$D/omo/omo.jsonc"
 B=$(run "$D" detect)
 is "shape is oh-my-openagent"     "$(jq -r .shape <<<"$B")"                 "oh-my-openagent"
 is "declared"                     "$(jq -r .ohMy.declaredInOpencodeJson <<<"$B")" "true"
-is "installed"                    "$(jq -r .ohMy.installed <<<"$B")"        "true"
-is "version detected"             "$(jq -r .ohMyVersion <<<"$B")"           "$OMO_VER"
 is "reads through [opencode]"     "$(jq -r '.files.ohmy.agents|length' <<<"$B")" "9"
 is "categories read"              "$(jq -r '.files.ohmy.categories|length' <<<"$B")" "8"
 is "scope reported"               "$(jq -r '.files.ohmy.scope' <<<"$B")"    "[opencode]"
 is "path is omo.jsonc"            "$(basename "$(jq -r '.files.ohmy.path' <<<"$B")")" "omo.jsonc"
-atleast "omo roster detected"     "$(jq -r '.roster.ohmy.agents|length' <<<"$B")" 11
-is "roster names sisyphus"        "$(jq -r '[.roster.ohmy.agents[]|select(.=="sisyphus")]|length' <<<"$B")" "1"
-atleast "omo categories detected" "$(jq -r '.roster.ohmy.categories|length' <<<"$B")" 8
 is "no E_JSONC warning"           "$(jq -r '[.warnings[]|select(.code=="E_JSONC")]|length' <<<"$B")" "0"
+# Everything below reads the real installed package: the version it reports, and the
+# roster of agents and categories it ships. Without it there is nothing to read, and
+# these are the assertions skip_omo was written for — it was defined and never called,
+# so the suite failed four times over on a machine that simply does not have omo.
+skip_omo "installed"                || is "installed"                    "$(jq -r .ohMy.installed <<<"$B")"        "true"
+skip_omo "version detected"         || is "version detected"             "$(jq -r .ohMyVersion <<<"$B")"           "$OMO_VER"
+skip_omo "omo roster detected"      || atleast "omo roster detected"     "$(jq -r '.roster.ohmy.agents|length' <<<"$B")" 11
+skip_omo "roster names sisyphus"    || is "roster names sisyphus"        "$(jq -r '[.roster.ohmy.agents[]|select(.=="sisyphus")]|length' <<<"$B")" "1"
+skip_omo "omo categories detected"  || atleast "omo categories detected" "$(jq -r '.roster.ohmy.categories|length' <<<"$B")" 8
 
 echo "=== C. omo declared but not configured yet ==="
 D=$(mk fresh yes)
