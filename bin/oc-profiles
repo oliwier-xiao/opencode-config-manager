@@ -257,6 +257,13 @@ MAX_PACKAGE_BYTES=67108864
 # somebody else wrote are capped here, at the end they come out of.
 MAX_EMIT_BYTES=4194304
 
+# And a cardinality bound to go with the byte one, for the two commands whose row
+# count grows with the store rather than with anything this plugin decides. A
+# panel drawing four hundred rows above the profile list is not a panel; the rest
+# is reported as a count and stays available from the command line.
+MAX_ISSUES=12
+MAX_DIFF_ROWS=64
+
 # Every file this shell reads goes through bin/safe-read: one open with O_NOFOLLOW
 # and O_NONBLOCK, every decision taken on that descriptor rather than on the name,
 # and exactly the bytes that were vouched for read back through it. A name checked
@@ -1575,10 +1582,38 @@ cmd_doctor() {
     fi
   } 2>/dev/null || true
 
-  jq -cn --argjson issues "$issues" '{ok:true, issues:$issues}'
+  # Bounded at the end the bytes come out of, like every other command that prints
+  # into the panel. Both halves matter: the rows are built from profile names and
+  # agent names read off files somebody else can write, and their number grows with
+  # the store — so the count is capped first and the bytes after it, rather than
+  # letting a store with four hundred broken profiles decide how much the shell
+  # buffers. What is left over is said out loud instead of silently dropped.
+  jq -cn --argjson issues "$issues" --argjson max "$MAX_ISSUES" '
+      ($issues | length) as $n
+    | { ok: true,
+        issues: ( if $n > $max
+                  then ($issues[0:$max] + [{code:"W_MORE", file:"", profile:"", agent:"",
+                                            count:($n - $max),
+                                            detail:(($n - $max | tostring)
+                                                    + " more, listed by `oc-profiles doctor`."),
+                                            fixable:false, fix:""}])
+                  else $issues end ) }' | head -c "$MAX_EMIT_BYTES"
 }
 
 # ---------------------------------------------------------------- repair
+
+# What a dry run prints, under the same two bounds `doctor` answers under. A diff
+# row carries the before and after of one entry — whole fallback chains, out of a
+# file somebody else wrote — so the count is capped and the bytes are capped after
+# it, at the end they come out of rather than once the shell has already buffered
+# them. `omitted` says how many rows are not in the list.
+emit_dry_run() {
+  jq -cn --argjson d "$1" --argjson max "$MAX_DIFF_ROWS" '
+      ($d | length) as $n
+    | { ok: true, dryRun: true,
+        diff: (if $n > $max then $d[0:$max] else $d end),
+        omitted: (if $n > $max then $n - $max else 0 end) }' | head -c "$MAX_EMIT_BYTES"
+}
 
 # Fix one doctor code. A dry run by default: {ok:true, dryRun:true, diff:[...]}
 # and nothing written, no lock taken. --apply backs up first, then writes,
@@ -1701,7 +1736,7 @@ repair_models() {
   done <<< "$rows"
 
   if [ "$apply" != 1 ]; then
-    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    emit_dry_run "$diff"
     return 0
   fi
 
@@ -1787,7 +1822,7 @@ repair_models_config() {
   fi
 
   if [ "$apply" != 1 ]; then
-    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    emit_dry_run "$diff"
     return 0
   fi
   [ "$fixed" -gt 0 ] || { jq -cn '{ok:true, fixed:0}'; return 0; }
@@ -1883,7 +1918,7 @@ repair_bare() {
   fi
 
   if [ "$apply" != 1 ]; then
-    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    emit_dry_run "$diff"
     return 0
   fi
 
@@ -1963,7 +1998,7 @@ repair_fallback() {
   fi
 
   if [ "$apply" != 1 ]; then
-    jq -cn --argjson d "$diff" '{ok:true, dryRun:true, diff:$d}'
+    emit_dry_run "$diff"
     return 0
   fi
 

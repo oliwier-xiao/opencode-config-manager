@@ -165,6 +165,35 @@ is "the file-level key is gone" "$(K '.fallback_models')" "null"
 is "the agent is untouched"     "$(K '.agents.oracle.model')" "anthropic/claude-opus-5"
 fi
 
+echo "=== what the panel is handed is bounded at both ends ==="
+# The marketplace review blocks on a process whose output the shell collects with
+# no producer-side byte or cardinality bound. Both rows here are built out of
+# names read from a file somebody else can write, and both counts grow with that
+# file — so a store with a hundred broken profiles must not decide how much the
+# shell buffers, and must not draw a hundred rows above the profile list either.
+D=$(mk bounded no)
+printf '{"$schema":"https://opencode.ai/config.json"}' > "$D/cfg/opencode.json"
+AGENTS=$(jq -cn '[range(80)] | map({key:("agent" + (.|tostring)),
+                                    value:{models:["a/b","c/d"]}}) | from_entries')
+for n in $(seq 0 29); do
+  OC_PROFILE_JSON="$(jq -cn --argjson a "$AGENTS" --arg id "p$n" --arg nm "Profile $n" \
+    '{id:$id, name:$nm, targets:[{file:"ohmy", shape:"oh-my-openagent",
+       manages:["agents","categories"], payload:{agents:$a}}]}')" \
+    run "$D" save >/dev/null
+done
+
+R=$(run "$D" doctor)
+is "the row count is capped"       "$(jq -r '.issues|length' <<<"$R")" "13"
+is "and the remainder is said"     "$(jq -r '[.issues[]|select(.code=="W_MORE")][0].count' <<<"$R")" "18"
+is "the extra row is not a repair" "$(jq -r '[.issues[]|select(.code=="W_MORE")][0].fixable' <<<"$R")" "false"
+is "still one JSON line"           "$(run "$D" doctor | wc -l)" "1"
+
+R=$(run "$D" repair --fix E_MODELS_IN_PROFILE --profile p0)
+is "a dry run caps its rows too"   "$(jq -r '.diff|length' <<<"$R")" "64"
+is "and says how many it left out" "$(jq -r '.omitted' <<<"$R")" "16"
+is "the repair itself is not capped" \
+   "$(run "$D" repair --fix E_MODELS_IN_PROFILE --profile p0 --apply | jq -r .fixed)" "80"
+
 echo "=== refusals ==="
 D=$(mk refuse no)
 printf '{"$schema":"https://opencode.ai/config.json"}' > "$D/cfg/opencode.json"
