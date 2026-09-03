@@ -49,9 +49,10 @@ the fix for it could not work, and a handful of things around it.
   it returns non-zero when any single provider is missing credentials.
 - **`categories.<name>.models` is accepted.** It is a real field on
   oh-my-openagent's category schema; only the agent schema lacks it. The refusal
-  applied to both, with a reason that was only ever true of agents — and a key that
-  is genuinely refused on a category now says so, rather than reporting itself as an
-  agent that was dropped.
+  applied to both, with a reason that was only ever true of agents. A key that is
+  genuinely refused now names the shape it was on, and says what oh-my-openagent
+  actually does with it: a plain zod object strips an unknown key rather than
+  rejecting the entry, so the agent stays and its model does not.
 - **The refresh timer works at every setting.** At `catalogRefreshHours` above 596
   the interval overflowed a 32-bit int, so the timer never fired and restarted
   itself hundreds of times a second. The settings slider goes to 720.

@@ -113,7 +113,7 @@ M=$(run "$D" apply mods)
 is "models is refused"           "$(jq -r .code <<<"$M")" "E_FIELD_4X"
 # The message is half the fix: a refusal that names the wrong shape is the reason
 # the check was split in the first place.
-is "and blames the agent"        "$(jq -r '.message|test("whole agent")' <<<"$M")" "true"
+is "and names the shape"         "$(jq -r '.message|test("on an agent")' <<<"$M")" "true"
 is "the file was left alone"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.reasoning')" "high"
 
 # A category is not an agent. oh-my-openagent's CategoryConfigSchema declares `models`;
@@ -133,8 +133,8 @@ CP=$(run "$D" apply catp)
 is "a category may not carry provider" "$(jq -r .code <<<"$CP")" "E_FIELD_4X"
 is "and is told it is a category"      "$(jq -r '.message|test("on a category")' <<<"$CP")" "true"
 # Not `test("agent")`: the product is called oh-my-openagent, so the word is in every
-# message. What must not be there is the claim that an agent was dropped.
-is "and is not blamed on an agent"     "$(jq -r '.message|test("whole agent")' <<<"$CP")" "false"
+# message. What must not be there is the claim that this was an agent.
+is "and is not called an agent"        "$(jq -r '.message|test("on an agent")' <<<"$CP")" "false"
 
 echo "=== the [opencode] block never gets a file-level fallback_models ==="
 OC_PROFILE_JSON='{"id":"fb","name":"Fb","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories","fallback_models"],"payload":{"agents":{},"categories":{},"fallback_models":[{"model":"google/gemini-3-flash-preview"}]}}]}' \

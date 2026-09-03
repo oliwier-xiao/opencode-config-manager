@@ -757,10 +757,13 @@ preflight() {
     bad_category=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_CATEGORY" '
       (.categories // {}) | to_entries[] | .value | select(type=="object")
       | keys[] | select(. as $k | $f | index($k))' 2>/dev/null | head -1)
+    # What actually happens is a strip, not a rejection: the entry survives without the
+    # key, so the agent stays and its model does not. Saying it is dropped whole sends
+    # people looking for a missing agent that is sitting right there.
     [ -z "$bad_agent" ] || refuse "E_FIELD_4X" \
-      "This profile sets \"$bad_agent\", which oh-my-openagent drops the whole agent over."
+      "This profile sets \"$bad_agent\" on an agent; oh-my-openagent has no such field and drops it on load, leaving that agent with no model. Use \"model\" and \"fallback_models\"."
     [ -z "$bad_category" ] || refuse "E_FIELD_4X" \
-      "This profile sets \"$bad_category\" on a category, which oh-my-openagent has no field for."
+      "This profile sets \"$bad_category\" on a category; oh-my-openagent has no such field and drops it on load."
   fi
 }
 
