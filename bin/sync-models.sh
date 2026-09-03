@@ -2,7 +2,7 @@
 #
 # sync-models.sh — joins `opencode models` (what you can reach right now) with
 # models.dev/api.json (name, context, price, reasoning efforts), marking each `reachable`.
-# Prints fresh | unchanged | cached | local | stale | offline; exit 0 = cache on disk is usable.
+# Prints fresh | unchanged | cached | local | reach | stale | offline; exit 0 = cache on disk is usable.
 
 set -uo pipefail
 
@@ -16,8 +16,21 @@ TTL="${TTL:-86400}"                        # seconds; the panel passes catalogRe
 # few minutes in the background, while the big catalogue keeps the long one.
 REACH_TTL="${REACH_TTL:-900}"             # seconds; how often `opencode models` is re-run
 RAW="$CACHE/models.dev.json"
+# When the catalogue was last confirmed current, which is not when the file was
+# last written: the usual answer from models.dev is `304 Not Modified`, which
+# proves the copy on disk is up to date without touching a byte of it. Reading
+# the clock off the file itself would make every later run think the download was
+# still due. It is written at the far end of a run, after the join has agreed the
+# bytes really were a catalogue — so a 200 that turned out to be a captive-portal
+# page never sets it, and the next run fetches again instead of sitting on it.
+CAT_STAMP="$CACHE/models.dev.stamp"
 ETAG="$CACHE/models.dev.etag"
 REACH="$CACHE/reachable.txt"
+# When the reachable list was last *attempted*, which is not the same as when it
+# last changed. `opencode models` can fail — no opencode, a hung provider probe,
+# a timeout — and a failure that leaves no trace is a failure that is retried on
+# every single panel open, forever. The clock has to tick on the attempt.
+REACH_STAMP="$CACHE/reachable.stamp"
 OUT="$CACHE/models.json"
 OC_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/models.json"
 
@@ -50,21 +63,26 @@ fresh_enough() {
   [ -s "$1" ] || return 1
   [ $(( $(date +%s) - $(stat -c %Y "$1" 2>/dev/null || echo 0) )) -lt "$2" ]
 }
-OUT_FRESH=0
+# Each clock lives in a file only the work it gates ever writes. The catalogue was
+# read off $OUT before, which every reach-only run rewrites — so the long TTL was
+# measured against a file the short cycle kept touching, and the download it was
+# meant to schedule was deferred once per cycle and therefore never happened at all.
+RAW_FRESH=0
 REACH_FRESH=0
 if [ "${FORCE:-0}" != 1 ]; then
-  fresh_enough "$OUT" "$TTL" && OUT_FRESH=1
-  fresh_enough "$REACH" "$REACH_TTL" && REACH_FRESH=1
-  if [ "$OUT_FRESH" = 1 ] && [ "$REACH_FRESH" = 1 ]; then echo cached; exit 0; fi
+  fresh_enough "$CAT_STAMP" "$TTL" && [ -s "$RAW" ] && RAW_FRESH=1
+  fresh_enough "$REACH_STAMP" "$REACH_TTL" && REACH_FRESH=1
+  if [ "$RAW_FRESH" = 1 ] && [ "$REACH_FRESH" = 1 ] && [ -s "$OUT" ]; then echo cached; exit 0; fi
 fi
 
 # ---------------------------------------------------------------- metadata
 
 # When only the reachable list went stale, the catalogue on disk is still good:
 # skip both downloads and re-join against it below. The reachable refresh and
-# the join that follow are the whole of a reach-only run.
+# the join that follow are the whole of a reach-only run. A missing or unreadable
+# $RAW is not fresh, so this block is also how a cold cache gets filled.
 status=cached
-if [ "$OUT_FRESH" = 0 ] || [ ! -s "$RAW" ]; then
+if [ "$RAW_FRESH" = 0 ]; then
 status=offline
 
 # opencode keeps a byte-identical mirror of models.dev; using it when newer costs no request.
@@ -120,14 +138,32 @@ if [ -z "$OPENCODE_BIN" ]; then
   done
 fi
 
+# Stamped before the probe, not after, and whether or not the probe works. This is
+# the clock REACH_TTL is read from, so a failure that left it untouched would be
+# retried on the next panel open, and the one after that — a broken or missing
+# opencode would put a fresh thirty-second subprocess behind every click on the bar.
+date +%s > "$REACH_STAMP" 2>/dev/null || true
+
 if [ -n "$OPENCODE_BIN" ]; then
   # head -c first: a subprocess can print more than anyone expected, and the cheap
   # place to stop that is the pipe it comes out of, not the file it lands in.
-  if reach="$(stage)" \
-     && timeout 30 "$OPENCODE_BIN" models 2>/dev/null | head -c "$MAX_REACH_BYTES" \
-        | sed -E 's/[[:space:]]+$//' \
-        | grep -E '^[A-Za-z0-9~._-]+/' > "$reach" 2>/dev/null && [ -s "$reach" ]; then
-    mv -f "$reach" "$REACH"
+  if printed="$(stage)" && reach="$(stage)"; then
+    timeout 30 "$OPENCODE_BIN" models 2>/dev/null | head -c "$MAX_REACH_BYTES" > "$printed"
+    # Judged on what it printed, never on how it exited. opencode returns non-zero
+    # when any single configured provider has no credentials — the exact state of
+    # someone half-way through adding one — and under `pipefail` that verdict would
+    # throw away a complete, correct list of every other provider's models.
+    #
+    # Judged, though, only on a whole printing. The timeout above kills a hung probe
+    # mid-line, and half of an id matches the id pattern exactly as well as all of
+    # one: it would reach the picker as a model, and the config as a model that does
+    # not exist. Command substitution eats trailing newlines, so an empty result here
+    # is the proof that the last line was finished.
+    if [ -s "$printed" ] && [ -z "$(tail -c 1 "$printed")" ]; then
+      sed -E 's/[[:space:]]+$//' "$printed" \
+        | grep -E '^[A-Za-z0-9~._-]+/' > "$reach" 2>/dev/null
+      [ -s "$reach" ] && mv -f "$reach" "$REACH"
+    fi
   fi
 fi
 [ -s "$REACH" ] || : > "$REACH"
@@ -150,6 +186,13 @@ staged="$(stage)" || { echo offline; exit 1; }
 jq -c --rawfile reach "$reach_in" '
   ($reach | split("\n") | map(select(length > 0))) as $reachable
   | ($reachable | map({key:., value:true}) | from_entries) as $reach_set
+  # Every id models.dev describes, before any of the filters below run. The
+  # fallback at the end needs to tell "never heard of it" from "heard of it and
+  # ruled it out": tested against the filtered list, a model models.dev says
+  # cannot call tools comes straight back as a first-class row, which is a model
+  # that loads and then fails on the first tool call an agent makes.
+  | ( [ to_entries[] | .key as $p | (.value.models // {}) | keys[] | ($p + "/" + .) ]
+      | map({key:., value:true}) | from_entries ) as $known_set
   | { generated: (now | floor),
       source: "models.dev + opencode models",
       reachableCount: ($reachable | length),
@@ -189,9 +232,10 @@ jq -c --rawfile reach "$reach_in" '
             search: (($p + " " + ($pn // "") + " " + .key + " " + ($m.name // "")) | ascii_downcase) } ]
     }
   # A model opencode can reach but models.dev has never heard of is still selectable; keep it.
+  # One models.dev knows and the filters above dropped is not that, and does not come back.
   | . as $cat
   | .models += [ $reachable[]
-      | select(. as $id | ($cat.models | map(.id) | index($id)) | not)
+      | select($known_set[.] | not)
       | (split("/")) as $parts
       | { id: ., provider: $parts[0], providerName: $parts[0],
           modelId: ($parts[1:] | join("/")),
@@ -213,9 +257,16 @@ fi
 
 if [ -s "$staged" ] && jq -e '.models | length > 0' "$staged" >/dev/null 2>&1; then
   mv -f "$staged" "$OUT"
+  # Here, and only here: the catalogue counts as confirmed once the join has read
+  # it and produced models from it. A body that passed the size check and was not
+  # JSON never reaches this line, so it is re-fetched next run rather than held
+  # for a day. A run that skipped the download block has nothing to confirm.
+  [ "$RAW_FRESH" = 0 ] && date +%s > "$CAT_STAMP" 2>/dev/null
   # A reach-only run skipped the downloads with status=cached, but it still
-  # rebuilt the cache: report that, so the log tells a refresh from a no-op.
-  [ "$status" = cached ] && status=fresh
+  # rebuilt the cache. It gets its own word rather than borrowing `fresh`, which
+  # this file reserves for a catalogue that was actually downloaded — a run that
+  # made no request at all should not be able to say it did.
+  [ "$status" = cached ] && status=reach
 else
   [ -s "$OUT" ] || { echo offline; exit 1; }
   status=stale
