@@ -172,6 +172,17 @@ qml_has  "Panel.qml" "root.loaded && root.detected !== null" \
          "Panel is only ready once both reads have answered"
 qml_has  "Panel.qml" "ready: root.ready" \
          "and hands that down to the list"
+
+# An effort is stepped down through the catalogue before it is written. Doing that
+# for oh-my-openagent rows only left an opencode agent carrying the old model's
+# effort onto a model with none — a config that loads and then fails on the first
+# request. The writer half is covered in model.test.js; this is the call site.
+qml_has  "ProfileEditor.qml" "var wanted = root.rows[index].variant" \
+         "every row steps its effort down against the new model"
+qml_lacks "ProfileEditor.qml" 'root.rows[index].file === "ohmy" ? root.rows[index].variant' \
+         "and not just the oh-my-openagent ones"
+qml_has  "ProfileEditor.qml" "Catalog.nearestVariant(root.catalogIndex, modelId, wanted)" \
+         "through the catalogue, not by hand"
 # Model.js is a .pragma library: setShape writes a global no binding depends on,
 # and `list` beats `detect` every time, so without this the first paint keeps the
 # wrong shape until something unrelated invalidates it.

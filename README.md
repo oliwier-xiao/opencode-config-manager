@@ -277,7 +277,7 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-210 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+216 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
@@ -292,9 +292,9 @@ change lands in the registry and not on the screen.
 The widget answers on the shell's IPC, under `oliwier.opencode-configs`:
 
 ```bash
-omarchy-shell ipc call oliwier.opencode-configs toggle
-omarchy-shell ipc call oliwier.opencode-configs refresh
-omarchy-shell ipc call oliwier.opencode-configs reload
+omarchy-shell oliwier.opencode-configs toggle
+omarchy-shell oliwier.opencode-configs refresh
+omarchy-shell oliwier.opencode-configs reload
 ```
 
 `open`, `close`, `show`, `hide` and `toggle` move the panel. `refresh` makes it
