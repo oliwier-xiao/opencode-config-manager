@@ -458,8 +458,16 @@ Item {
         // provider — so a list of a dozen profiles groups by eye instead of reading
         // as one grey column. A profile on no single provider gets the muted
         // fallback, which is what the bar looked like before any of this.
-        readonly property string provider:
-          Palette.dominantProvider(Model.rowsFor(modelData))
+        // Counted off rowsFor, which reads the shape out of a .pragma library global —
+        // so this needs the same dependency the summary beside it has. Without it the
+        // bar keeps the answer it was drawn with, and before detect answers that is
+        // six opencode rows rather than the twenty-four the profile holds: a profile
+        // whose base model is on one provider and whose agents are on another takes
+        // the base model's colour and never lets go of it.
+        readonly property string provider: {
+          root.shapeGeneration
+          return Palette.dominantProvider(Model.rowsFor(modelData))
+        }
         color: rowItem.isActive
           ? root.accent
           : Palette.providerTint(provider, root.accent, Color.popups.background, root.veryMuted)

@@ -163,6 +163,12 @@ is "and exits 1, not a refusal" "$rc" "1"
 echo "=== the panel does not assert what it has not read ==="
 qml_has(){ grep -qF "$2" "$REPO/$1" && ok "$3" || no "$3" "$1 no longer has: $2"; }
 qml_lacks(){ grep -qF "$2" "$REPO/$1" && no "$3" "$1 still has: $2" || ok "$3"; }
+# `grep -F` matches one line at a time, and a QML binding that spans several lines
+# cannot be asserted that way — least of all the thing worth asserting about one,
+# which is that a particular dependency sits inside a particular expression. The
+# file collapsed to a single line makes the whole binding one searchable string.
+qml_has_flat(){ tr '\n' ' ' < "$REPO/$1" | tr -s ' ' | grep -qF "$2" \
+  && ok "$3" || no "$3" "$1 no longer has: $2"; }
 
 qml_has  "Panel.qml" "Model.resolveActiveId(store)" \
          "Panel takes the active profile from resolveActiveId"
@@ -196,6 +202,13 @@ qml_has  "ProfileList.qml" "rowItem.isActive" \
          "the running profile still gets the accent"
 qml_has  "ProfileList.qml" "Palette.dominantProvider(Model.rowsFor(modelData))" \
          "and the others take the tint of the provider they are mostly on"
+# rowsFor reads the shape out of a .pragma library global, so this binding needs the
+# same counter the summary beside it reads. Without it the bar is coloured off six
+# opencode rows and never recounted: a profile whose base model is on one provider
+# and whose agents are on another wears the wrong colour for the session.
+qml_has_flat "ProfileList.qml" \
+         "readonly property string provider: { root.shapeGeneration return Palette.dominantProvider(Model.rowsFor(modelData)) }" \
+         "counted against the roster that arrived, not the one it was drawn with"
 
 # setRoster and setShape write globals in a .pragma library, which no binding can
 # watch. A row that read Model.summary() before detect answered kept the built-in
