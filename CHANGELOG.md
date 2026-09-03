@@ -76,6 +76,22 @@ listing them, until the cache was deleted by hand.
   ipc call <target> <method>` answered "Target not found" for all three; the wrapper
   takes `<target> <method>`.
 
+### Changed
+
+- **Free is one key, not two.** It mixed OpenRouter and OpenCode Zen, so it needed both
+  to work as shipped. It is now every agent on a free OpenCode Zen model — seven of them —
+  and the OpenRouter half moved to a template of its own.
+- **Free (OpenRouter)** is new: the same idea drawn from OpenRouter's free tier, where the
+  pool is wider and Inkling takes the full range of efforts.
+- **Budget is actually cheap.** It was led by GLM 5.2 at $0.97/M in — thirty-two times the
+  price of the model doing its reading. Nothing in it now costs more than $0.075/M in:
+  Ling 3.0 Flash reads at $0.021, Qwen3.7 Flash searches at $0.03, GPT-OSS 120B reasons at
+  $0.037, DeepSeek V4 Flash builds at $0.065, GLM 5.3 Flash thinks at $0.075.
+- **The templates have a test.** They are config this plugin writes on one click and nothing
+  checked them: that every model still exists, that a template names no provider it does not
+  declare, that the free ones are free — and that no template asks a model for an effort it
+  does not offer, which is the one shape that loads and then fails.
+
 ## 1.1.2
 
 A config this plugin wrote could be refused by the software it was written for.

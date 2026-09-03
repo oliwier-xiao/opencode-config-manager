@@ -169,11 +169,15 @@ into the JSON, and the two merge.
 
 ## Templates
 
-Seven ready-made profiles ship with the plugin. Each one matches models to what an agent actually
+Eight ready-made profiles ship with the plugin. Each one matches models to what an agent actually
 does — the heavy thinking on a strong model, the file-scanning on a cheap fast one — so someone
 who has just connected a key does not have to pick every model by hand. Under oh-my-openagent a
 template fills eleven agents and eight categories; on plain opencode it sets the default model and
 two agents. Each row says which.
+
+The two free sets are deliberately kept apart by provider, so each one works with a single key
+rather than needing both. Under oh-my-openagent every agent in them gets two fallbacks, because
+free SKUs are rate limited before they are withdrawn.
 
 | | |
 |---|---|
@@ -181,8 +185,9 @@ two agents. Each row says which.
 | **Gemini API** | 3.1 Pro for the thinking, Flash for everything cheap. The lowest-cost coherent config in the catalogue |
 | **GPT API** | the GPT-5 line, codex on the building agent |
 | **Daily work** | a strong brain with cheap models doing the bulk, across providers |
-| **Budget** | as cheap as it gets while still being pleasant |
-| **Free** | costs nothing. Under oh-my-openagent every agent gets two free fallbacks, because these are preview SKUs and previews get withdrawn |
+| **Budget** | the cheapest set on OpenRouter that still finishes a task, and nothing in it costs more than $0.075/M in |
+| **Free** | costs nothing, and asks for one key: every agent on a free OpenCode Zen model |
+| **Free (OpenRouter)** | the same idea on the other key, out of OpenRouter's free tier |
 | **oh-my-openagent recommended** | the line-up its author publishes on [omo.dev](https://omo.dev/), model for model |
 
 ![Templates](docs/templates.png)
@@ -277,7 +282,7 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-230 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+241 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, and which profile counts as the running one.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
