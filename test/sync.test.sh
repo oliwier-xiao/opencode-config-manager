@@ -57,6 +57,10 @@ export OPENCODE_BIN="$T/bin/opencode"
 calls() { [ -f "$1" ] && wc -l < "$1" | tr -d ' ' || echo 0; }
 run() { TTL="${TTL:-86400}" REACH_TTL="${REACH_TTL:-900}" "$REPO/bin/sync-models.sh" 2>/dev/null; }
 age() { touch -d "$2" "$1" 2>/dev/null; }
+# The catalogue has two clocks: when it was last confirmed, and when it was last
+# asked for. Real time moves both, so a test that moves one is testing a state that
+# cannot happen.
+age_cat() { age "$C/models.dev.stamp" "$1"; age "$C/models.dev.attempt" "$1"; }
 
 echo "=== a cold cache is built from both sources ==="
 S1="$(run)"
@@ -89,7 +93,7 @@ echo "=== reach-only runs do not postpone the catalogue for ever ==="
 # run out, so models.dev was downloaded exactly once and never again.
 for _ in 1 2 3; do age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null; done
 is "still no download while young"  "$(calls "$T/curl.calls")" "1"
-age "$C/models.dev.stamp" "25 hours ago"
+age_cat "25 hours ago"
 age "$C/reachable.stamp" "20 minutes ago"
 run >/dev/null
 is "an aged catalogue is fetched"   "$(calls "$T/curl.calls")" "2"
@@ -127,7 +131,7 @@ echo "=== a 304 confirms the catalogue without rewriting it ==="
 # the file. Reading the clock off the file would leave the download permanently
 # due: every panel open would spend a request and an `opencode models` probe.
 echo 304 > "$T/curl.mode"
-age "$C/models.dev.stamp" "25 hours ago"; age "$C/reachable.stamp" "20 minutes ago"
+age_cat "25 hours ago"; age "$C/reachable.stamp" "20 minutes ago"
 before="$(calls "$T/curl.calls")"
 is "the check happens"              "$(run)" "unchanged"
 is "and it cost one request"        "$(calls "$T/curl.calls")" "$((before+1))"
@@ -141,7 +145,7 @@ echo "=== a 200 that is not a catalogue is re-fetched, not sat on ==="
 # portal answers 200 with a login page; holding that for a whole TTL would freeze
 # the picker for a day on a network the user has already left.
 echo portal > "$T/curl.mode"
-age "$C/models.dev.stamp" "25 hours ago"; age "$C/reachable.stamp" "20 minutes ago"
+age_cat "25 hours ago"; age "$C/reachable.stamp" "20 minutes ago"
 is "the bad body is rejected"       "$(run)" "stale"
 echo 200 > "$T/curl.mode"
 before="$(calls "$T/curl.calls")"
@@ -166,7 +170,54 @@ run >/dev/null
 is "the whole list was kept"        "$(cmp -s "$T/reach.before" "$C/reachable.txt" && echo same)" "same"
 is "no half-written id got in"      "$(jq -r '[.models[].id]|index("zen/trunc")==null' "$C/models.json")" "true"
 
+echo "=== a machine that cannot reach models.dev backs off instead of retrying ==="
+# curl here answers 000 the way it does with no route to the host. Without a record
+# of the attempt, every panel open would spend the full --max-time/--retry budget
+# rediscovering that, because a failed download leaves the catalogue still due.
+cat > "$T/bin/curl" <<EOF
+#!/usr/bin/env bash
+echo call >> "$T/curl.calls"
+printf '000'
+exit 7
+EOF
+chmod +x "$T/bin/curl"
+rm -f "$C/models.dev.stamp" "$C/models.dev.attempt"
+before="$(calls "$T/curl.calls")"
+age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null
+is "it tries once"                  "$(calls "$T/curl.calls")" "$((before+1))"
+age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null
+age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null
+is "and not again straight away"    "$(calls "$T/curl.calls")" "$((before+1))"
+age "$C/models.dev.attempt" "20 minutes ago"
+age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null
+is "but it does try again later"    "$(calls "$T/curl.calls")" "$((before+2))"
+
+echo "=== with no catalogue at all, the reachable list alone still fills the picker ==="
+# The aeroplane: opencode works, models.dev does not. Before, the script stopped
+# before it ever ran the probe, and the picker had nothing in it.
+cat > "$T/bin/opencode" <<EOF
+#!/usr/bin/env bash
+echo call >> "$T/oc.calls"
+printf 'zen/good\nzen/offline-only\n'
+EOF
+chmod +x "$T/bin/opencode"
+rm -f "$C/models.dev.json" "$C/models.json" "$C/models.dev.stamp" "$C/models.dev.attempt" "$C/reachable.stamp"
+out="$(run)"
+is "the run still produces a list"   "$([ -s "$C/models.json" ] && echo yes)" "yes"
+is "and it does not claim offline"   "$out" "reach"
+is "every reachable model is there"  "$(jq -r '[.models[].id]|index("zen/offline-only")!=null' "$C/models.json")" "true"
+is "flagged unreachable-unknown"     "$(jq -r '[.models[]|select(.id=="zen/offline-only")][0].context' "$C/models.json")" "0"
+
 echo "=== FORCE goes past every gate ==="
+cat > "$T/bin/curl" <<EOF
+#!/usr/bin/env bash
+echo call >> "$T/curl.calls"
+out=""; prev=""
+for a in "\$@"; do [ "\$prev" = "-o" ] && out="\$a"; prev="\$a"; done
+[ -n "\$out" ] && cp "$T/api.json" "\$out"
+printf '200'
+EOF
+chmod +x "$T/bin/curl"
 before="$(calls "$T/curl.calls")"
 FORCE=1 run >/dev/null
 is "forced run downloads anyway"    "$(calls "$T/curl.calls")" "$((before+1))"

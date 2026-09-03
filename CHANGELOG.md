@@ -49,6 +49,29 @@ listing them, until the cache was deleted by hand.
 - **`dev-sync.sh` removes what it excludes.** `--delete` leaves already-deployed
   copies of an excluded name in place; a `.codegraph` symlink from an earlier run
   stayed in the plugin folder and kept failing `omarchy plugin validate`.
+- **A machine that cannot reach models.dev backs off.** A failed download left the
+  catalogue still due, so every panel open spent the whole curl retry budget finding
+  that out again. The attempt is recorded; a body that arrived and turned out not to
+  be a catalogue is not treated as one, and is asked for again on the next run.
+- **The ETag is saved only once the body it belongs to has been accepted.** curl
+  wrote it in the same call that stored the response, before anything had looked at
+  it — so one bad 200 had every later request answered 304 for content that was
+  never kept. A day-old list, repairable only by deleting the cache.
+- **With no catalogue at all, the reachable list alone fills the picker.** The run
+  stopped before it ever asked opencode what it could reach, so a first run with no
+  network left the picker empty on a machine where every model worked.
+- **A deprecated model you can still reach stays in the list.** It would otherwise
+  vanish while selected in the config.
+- **The reachability probe runs the opencode on your PATH.** `~/.opencode` is where
+  the curl installer leaves a copy that never updates itself, and it was preferred —
+  so on a machine that later installed opencode from a package, the model list came
+  from an older opencode than the one being run. `bin/oc-profiles` always used PATH;
+  both halves agree now.
+- **The oh-my-openagent roster comes off the newest install present.** Directories
+  accumulate one per spec, and a lexicographic glob put an abandoned 4.13 ahead of
+  the 4.19 actually loaded — and could not match the unsuffixed directory at all.
+- **Staged files from a killed run are swept.** Every glob was scoped to the run
+  that made it, so nothing ever removed them.
 
 ## 1.1.2
 

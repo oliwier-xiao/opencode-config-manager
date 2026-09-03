@@ -101,7 +101,7 @@
         "max": 720,
         "step": 1,
         "defaultValue": 24,
-        "description": "Hours. The list of models comes from your own opencode, so it holds exactly what your keys can reach, and is cached between panel opens. Opening the panel refreshes a stale cache in the background — what you can reach is re-checked every few minutes — and r forces it now."
+        "description": "Hours. How often the models.dev catalogue behind the list — names, context windows, prices — is re-downloaded. What you can reach is a separate, local question, re-checked every few minutes on its own; opening the panel refreshes either in the background when it is due, and r forces both now."
       },
       {
         "key": "showModelMeta",

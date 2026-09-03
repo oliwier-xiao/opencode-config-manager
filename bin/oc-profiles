@@ -374,11 +374,22 @@ scope_for() {
 # path has never existed on any install; every plugin gets its own directory named
 # after the spec it was requested by.
 omo_package_dir() {
-  local d
-  for d in "$CACHE_HOME"/opencode/packages/oh-my-openagent@*/node_modules/oh-my-openagent \
-           "$CACHE_HOME"/opencode/packages/oh-my-opencode@*/node_modules/oh-my-opencode; do
-    [ -f "$d/package.json" ] && { printf '%s' "$d"; return 0; }
+  local d best="" best_v="" v
+  # Every spec the plugin was ever requested by leaves a directory behind, and they
+  # accumulate: an `@latest` beside a bare one beside a pinned `@4.20`. A glob hands
+  # those back in lexicographic order, which put a long-abandoned 4.13 ahead of the
+  # 4.19 actually loaded. The roster has to come off the newest one present, and the
+  # bare directory — which the old pattern could not even match — counts too.
+  for d in "$CACHE_HOME"/opencode/packages/oh-my-openagent*/node_modules/oh-my-openagent \
+           "$CACHE_HOME"/opencode/packages/oh-my-opencode*/node_modules/oh-my-opencode; do
+    [ -f "$d/package.json" ] || continue
+    v="$(jq -r '.version // empty' "$d/package.json" 2>/dev/null)"
+    [ -n "$v" ] || continue
+    if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$best_v" "$v" | sort -V | tail -1)" = "$v" ]; then
+      best="$d"; best_v="$v"
+    fi
   done
+  [ -n "$best" ] && printf '%s' "$best"
   return 0
 }
 
