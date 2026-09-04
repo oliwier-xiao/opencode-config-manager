@@ -1,5 +1,50 @@
 # Changelog
 
+## 1.4.0
+
+Everything this plugin knows about oh-my-openagent it reads out of the installed
+package, and it was reading it from three places that are one upstream release from
+moving: a filename, a JSON path, and a regular expression over a minified bundle.
+None of those failing is loud. Each one answers "nothing", an empty answer is refused
+rather than drawn, and the panel falls back to the roster the plugin was published
+with — a working-looking panel missing whatever the last few releases added.
+
+### Added
+
+- **The Health strip says when this plugin has gone blind.** oh-my-openagent installed
+  and its declarations unreadable is now a line you can see, rather than a panel that
+  looks right and is quietly a version behind.
+- **`upstream.test.sh`**, a suite pointed at the two programs this plugin sits between
+  rather than at the plugin: the schema is still where the package says it is, both
+  rosters still answer, the field list is the one the install declares, `opencode
+  generate` still names its agents where they were, and `opencode models` still prints
+  one `provider/model` per line. It is the suite that goes red when nothing here changed.
+
+### Changed
+
+- **The schema is located through the package's own `exports` map**, not by filename.
+  Upstream renamed itself to `oh-my-openagent` and left the schema inside called
+  `oh-my-opencode.schema.json`; reading the pointer rather than the name is what
+  survives them finishing that. A file under a name nobody predicted is still found.
+- **The category roster comes off the shipped declarations**, with the minified bundle
+  kept only as a fallback. A regex over one minified line was the most breakable thing
+  in this plugin, and it was the only way it had of knowing what a category is.
+- **Which fields an entry may carry is read per install rather than kept by hand.**
+  A hand-kept list is right for the release it was written against: 4.19 has no
+  `models` on an agent, and the 5.0 line makes it the canonical field there — so the
+  list as shipped would have refused, on that release, the one spelling upstream wants.
+  Only model-carrying keys the installed schema does not declare are refused now, so
+  the same code is correct on both without being edited. The shipped list remains the
+  answer when the schema cannot be read at all.
+- **The built-in fallback rosters are what the probes actually return**, order
+  included. They had drifted three agents behind on each side, so a probe failing did
+  not just lose the newest agents — it quietly redrew the panel in a different order.
+
+### Fixed
+
+- `test/doctor.test.sh` shipped without its executable bit, and ran only because the
+  runner invokes it through `bash`.
+
 ## 1.3.0
 
 The panel refused a broken profile and left you to fix it in a text editor. It finds

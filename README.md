@@ -14,7 +14,10 @@ oh-my-openagent it shows oh-my-openagent's — its agents supersede opencode's, 
 would offer two rows for one decision. The pill in the top right of the panel says which it found.
 
 The list of agents is read off the software you have installed — opencode's own generated schema,
-and oh-my-openagent's own shipped schema — never from a list baked into this plugin. Agents you
+and the schema and declaration files oh-my-openagent ships — never from a list baked into this
+plugin. Where its schema lives is read from that package's own `exports` map rather than assumed,
+so a release that renames the file is one this plugin follows; a release that moves it somewhere
+nothing can find is one the Health strip names out loud. Agents you
 defined yourself are read straight out of your config and come first.
 
 ### What the mark is telling you
@@ -279,6 +282,7 @@ no strip at all.
 | **A file-level `fallback_models`** | under `[opencode]`, which `doctor` reports as `Unknown config key` against `Affects: plugin startup`. Deleted, with a splice, so the rest of the file is untouched. |
 | **A legacy `oh-my-openagent.json`** | left behind by the migration. Reported, never deleted: it may be the only copy of an old setup. |
 | **`variant` rather than `reasoning`** | one line, whatever the count. Both spellings load — this is worth knowing and not worth doing anything about. |
+| **This plugin can no longer read oh-my-openagent** | it declares its agents, its categories and its fields in files this plugin reads; when a release moves them, every probe answers nothing and the panel falls back to the roster it shipped with. That looks like a working panel missing whatever the last few releases added, so it is the one failure nobody would think to report. Named here instead. |
 
 Every repair copies the file first and is undone by the same **Restore the previous config** a
 switch is, and a repair that does not land puts the file back itself. From a terminal it is the
@@ -317,8 +321,13 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-321 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+353 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
+One suite is pointed outward rather than in: `upstream.test.sh` asserts what this plugin assumes
+about the two programs it sits between, against the copies actually installed — that the schema
+is still where the package says, that the agent and category rosters still answer, that the field
+list it refuses on is the one the install declares, and that the built-in fallback still says what
+the probe would. It is the suite that goes red when nothing in this repository changed.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
 a machine that does not have it installed, and so does the QML suite where there is no Qt6
