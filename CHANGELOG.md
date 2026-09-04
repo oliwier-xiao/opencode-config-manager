@@ -42,6 +42,16 @@ with — a working-looking panel missing whatever the last few releases added.
 
 ### Fixed
 
+- **A leak check that could not fail.** The assertion that a killed run strands no
+  copy of your config excluded the test's own scratch root — which is where the cache
+  it searches lives, so every hit from the one directory it was there to check was
+  thrown away before being counted. It reports the leak now; against the version
+  before this commit, a planted one passes.
+- **A leak check that failed for the wrong reason.** Both canaries were fixed
+  literals, present in the test source as well as in the config, so any checkout of
+  this repository sitting under `TMPDIR` was reported as a leak. They are minted per
+  run, which also sharpens the claim from "this string is on the disk" to "this run
+  put it there".
 - `test/doctor.test.sh` shipped without its executable bit, and ran only because the
   runner invokes it through `bash`.
 

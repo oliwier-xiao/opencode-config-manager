@@ -116,17 +116,22 @@ else
 fi
 
 echo "=== a killed detect leaves no config in a temp file ==="
+# Minted per run, so it is written down nowhere — least of all in this file. A fixed
+# literal lives in the test source too, so any checkout of this repository sitting
+# under TMPDIR was reported as a leak by a suite working perfectly. It also sharpens
+# the claim from "this string is on the disk" to "this run put it there".
+CANARY="sk-SECRET-$$-${RANDOM}${RANDOM}"
 D=$(mk temps)
-printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"sk-SECRET-CANARY"}}}}' > "$D/cfg/opencode.json"
+printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"%s"}}}}' "$CANARY" > "$D/cfg/opencode.json"
 run "$D" detect >/dev/null 2>&1
-# The config itself holds the canary by construction, and so does this file.
-LEAK=$(grep -rl "sk-SECRET-CANARY" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null \
-  | grep -v "/cfg/" | grep -vF "$REPO" | head -3)
+# The config it was planted in is the one file allowed to hold it.
+LEAK=$(grep -rl "$CANARY" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null | grep -v "/cfg/" | head -3)
 [ -z "$LEAK" ] && ok "no temp file holds the provider key" || no "no temp file holds the provider key" "$LEAK"
 
 echo "=== a killed run leaves no staged file behind ==="
 D=$(mk killtemp)
-printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"sk-CANARY-XYZ"}}}}' > "$D/cfg/opencode.json"
+KILL_CANARY="sk-KILLED-$$-${RANDOM}${RANDOM}"
+printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"%s"}}}}' "$KILL_CANARY" > "$D/cfg/opencode.json"
 # A copy that stalls after the temporaries exist, kept inside bin/ so the helpers
 # next to it are still found.
 SLOWBIN="$ROOT/slowbin"; mkdir -p "$SLOWBIN"
@@ -146,7 +151,10 @@ OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" XDG_CACHE_HOME="$D/cache" 
 [ -s "$SLOWBIN/oc-profiles" ] && grep -q "sleep 6" "$SLOWBIN/oc-profiles" \
   && ok "the stalling copy was built" || no "the stalling copy was built" "empty or unpatched"
 is "nothing staged survives"    "$(find "$D/cache" -name '.stage.*' 2>/dev/null | wc -l)" "0"
-LEFT=$(grep -rl "sk-CANARY-XYZ" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null   | grep -v "/cfg/" | grep -vF "$REPO" | grep -vF "$ROOT" | wc -l)
+# $D/cache is the place a killed run would strand a staged copy, and it sits under
+# $ROOT — so excluding $ROOT, as this did, threw away every hit from the one directory
+# the check is here to search. It could not have failed.
+LEFT=$(grep -rl "$KILL_CANARY" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null | grep -v "/cfg/" | wc -l)
 is "and no provider key with it" "$LEFT" "0"
 
 echo "=== a missing helper says so plainly ==="
