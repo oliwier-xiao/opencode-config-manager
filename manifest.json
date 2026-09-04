@@ -60,7 +60,7 @@
           "Nothing"
         ],
         "defaultValue": "Notify",
-        "description": "A running opencode read its config when it started. Notify writes the files and says which sessions have not seen them yet. Restart opencode asks each running session to re-read its config where it stands — nothing closes, nothing is lost, and the next message uses the new models. Nothing writes the files and says nothing."
+        "description": "A running opencode read its config when it started. Notify writes the files and says which sessions have not seen them yet. Restart opencode asks each running session to re-read its config where it stands — nothing closes and nothing is lost. A session fixes its model when it is created, so the conversation you are in keeps the one it started on; the switch lands on the next session and on the subagents every run after it spawns. Nothing writes the files and says nothing."
       },
       {
         "key": "confirmSwitch",

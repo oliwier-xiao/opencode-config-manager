@@ -52,6 +52,13 @@ with — a working-looking panel missing whatever the last few releases added.
   this repository sitting under `TMPDIR` was reported as a leak. They are minted per
   run, which also sharpens the claim from "this string is on the disk" to "this run
   put it there".
+- **"the next message uses the new models" was not true, and is no longer claimed.**
+  A session fixes its model when it is created and keeps it: one here ran for a day
+  across six profile switches and stayed on the model it opened with, and no session
+  on this machine has ever run two. `SIGUSR2` does make opencode re-read its config —
+  what it cannot do is move the conversation you are already sitting in. The switch
+  lands on the next session and on the subagents each run spawns, which is where the
+  work happens; the README, the settings description and the intro all said otherwise.
 - `test/doctor.test.sh` shipped without its executable bit, and ran only because the
   runner invokes it through `bash`.
 
