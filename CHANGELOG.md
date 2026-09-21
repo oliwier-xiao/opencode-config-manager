@@ -1,5 +1,55 @@
 # Changelog
 
+## 1.5.0
+
+Everything below the model on an oh-my-openagent row — the fallback chain — was drawn
+before anyone had used it. Adding a fallback opened a picker with every model stacked on
+one line; the chips it produced slid under the edge of the panel; the arrows offered for
+reordering a vertical list pointed sideways; and the model picker reopened on the very
+click meant to close it.
+
+### Fixed
+
+- **Clicking an open picker closes it.** The trigger toggled on paper —
+  `popup.opened ? close() : open()` — and opened every time in practice. The popup is a
+  child of the trigger, so a press on the trigger is a press *outside the popup*, and the
+  default `CloseOnPressOutside` acts on the press: the list was already hidden by the time
+  the release became `onClicked`, and the toggle opened it again. `CloseOnPressOutsideParent`
+  exempts the trigger, leaving the toggle the only thing acting on that click while a press
+  anywhere else still dismisses. It is the boundary Qt's own `ComboBox` draws internally,
+  and the behaviour the WAI-ARIA combobox pattern, Material's menus and the WHATWG's
+  customisable-`select` proposal all describe. Not a timestamp guard: that keeps the wrong
+  policy and breaks Escape to paper over a race the flag removes outright.
+- **The fallback picker draws its list.** It is only ever opened from code, so its closed
+  trigger was zeroed to keep it from swallowing a click — with `rowHeight`, which also
+  sizes the popup's search field, its result rows and its height cap. Every model in it
+  rendered on top of every other. The trigger has its own `triggerHeight` now.
+- **Fallbacks stack under the first one, and stay inside the panel.** A wrapping `Flow`
+  began the second chip wherever the first one ended, so a chain never lined up and a long
+  one ran off the edge. One chip per line, each starting at the same x.
+- **The reorder arrows point the way the list runs.** They were `‹ ›` across a column that
+  runs downwards. They are `󰅃 󰅀` now; the first chip has no up and the last has no down,
+  and the room for both is held from the second chip onwards, so a chip no longer resizes
+  under the pointer that is reaching for it.
+- **The fallback picker names the agent it is about to change.** It opens in a fixed place
+  under the header rather than beside the chip that summoned it, which left nothing saying
+  which row the pick would land on.
+- **Adding a fallback is a chip, not a bare `+`.** It lines up under the chain it extends,
+  and on an agent that has none it reads "pick a model" — that line used to say "falls back
+  to" and then nothing at all.
+- **A fallback can no longer be the model it falls back from**, nor one already in the
+  chain. Either is a chain that retries what has just failed.
+
+### Notes
+
+- `dev-sync.sh` assumed the installed plugin folder was a copy of the checkout. Where it is
+  a symlink back to it — which is how this one is developed — its `rm -rf` on two ignored
+  directories ran *inside the repository*, and `omarchy plugin validate` then refused the
+  symlink and stopped the script before it restarted the shell, so the one thing it is run
+  for never happened. It tells the two installs apart now, deletes nothing under a linked
+  one, and validates a throwaway copy so the marketplace check is not lost. Development
+  only; nothing that ships changed.
+
 ## 1.3.0
 
 The panel refused a broken profile and left you to fix it in a text editor. It finds
