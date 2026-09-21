@@ -612,6 +612,7 @@ Item {
           // Cost as one dot: ordinal, so one hue at graded strength — a palette
           // would read as unrelated kinds. Only the top band earns the brand colour.
           Rectangle {
+            id: tierDot
             anchors.verticalCenter: parent.verticalCenter
             readonly property string tier:
               Palette.profileTier(Model.rowsFor(modelData), root.catalogIndex)
@@ -633,16 +634,44 @@ Item {
             font.pixelSize: Style.font.body
             font.bold: rowItem.isActive
             elide: Text.ElideRight
+            // Bounded so the badge beside it cannot push a long name off the
+            // row: elide needs a width, and in a Row it would otherwise take
+            // whatever its text asked for.
+            width: Math.min(implicitWidth,
+                            rowLabels.width
+                            - (tierDot.visible ? tierDot.width + Style.spacing.md : 0)
+                            - (inUseBadge.visible ? inUseBadge.implicitWidth + Style.spacing.md : 0))
           }
 
-          Text {
+          // Which profile is running is the one thing a glance at this list is
+          // looking for, and it was drawn in the faintest colour on the row.
+          // A badge in the accent instead, on the same 10%-fill / 35%-border
+          // pill the error strip uses, so it is found rather than hunted for.
+          BorderSurface {
+            id: inUseBadge
             anchors.verticalCenter: parent.verticalCenter
-            textFormat: Text.PlainText
             visible: rowItem.isActive
-            text: root.drift ? "in use, edited" : "in use"
-            color: root.veryMuted
-            font.family: root.fontFamily
-            font.pixelSize: Style.font.caption
+            implicitWidth: inUseText.implicitWidth + Style.spacing.lg * 2
+            implicitHeight: inUseText.implicitHeight + Style.spacing.xs * 2
+            radius: Style.cornerRadius
+            color: Util.alpha(root.accent, 0.14)
+            borderSpec: Border.flat(Util.alpha(root.accent, 0.40), Style.normalBorderWidth)
+
+            Text {
+              id: inUseText
+              anchors.centerIn: parent
+              textFormat: Text.PlainText
+              // Drift is already said twice and quietly — the state bar dims to
+              // 0.45 and the strip above explains it — so the badge keeps its
+              // colour and adds the word, rather than fading out the very thing
+              // the eye is looking for.
+              text: root.drift ? "IN USE · EDITED" : "IN USE"
+              color: root.accent
+              font.family: root.fontFamily
+              font.pixelSize: Style.font.caption
+              font.bold: true
+              font.letterSpacing: Style.space(1)
+            }
           }
         }
 

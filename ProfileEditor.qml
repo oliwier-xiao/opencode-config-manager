@@ -72,6 +72,41 @@ Item {
 
   function rowKey(row) { return row.file + " " + row.group + " " + row.key }
 
+  // ---- Name column width --------------------------------------------------
+  // One width for every row, so the controls line up — but measured off the
+  // longest name actually in this roster instead of a fixed 140px. The roster
+  // is eleven agents whose longest is "hephaestus"; reserving the old width
+  // left most rows with a third of a column of nothing between the name and
+  // the model. Capped at the old value so it can never come out worse, and
+  // floored so a roster of very short names does not crowd the two together.
+  FontMetrics {
+    id: nameMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.body
+  }
+  FontMetrics {
+    id: kindMetrics
+    font.family: root.fontFamily
+    font.pixelSize: Style.font.caption
+  }
+
+  readonly property real labelWidth: {
+    var w = 0
+    for (var i = 0; i < root.rows.length; i++) {
+      var r = root.rows[i]
+      w = Math.max(w, nameMetrics.advanceWidth(String(r.label || "")))
+      // The kind sits under the name in the same column and is often the
+      // wider of the two: "opencode agent" outruns every agent name there is.
+      var kind = r.group === "category"
+        ? "category"
+        : ((r.file === "opencode" && r.group === "agent") ? "opencode agent" : "")
+      if (kind !== "") w = Math.max(w, kindMetrics.advanceWidth(kind))
+    }
+    // Style.space(14) is the room the unsaved-change dot takes to the left of
+    // a name; without it a touched row would elide what an untouched one fits.
+    return Math.min(Style.space(140), Math.max(Style.space(56), w + Style.space(14)))
+  }
+
   // Model reset survival: model: root.rows is a fresh JS array from
   // Model.rowsFor on every profileEdited, so ListView sees a model reset and
   // drops contentY to 0. Save the viewport before the reset lands ...
@@ -99,21 +134,54 @@ Item {
   // open cannot clear this itself.
   function clearPickerState() {
     agentList.anyPickerOpen = false
+    root.clearFallbackPicker()
+  }
+
+  function clearFallbackPicker() {
     fallbackPicker.close()
     root.pendingFallbackRow = -1
     root.pendingFallbackIndex = -1
     fallbackPicker.value = ""
   }
 
-  // Opens the shared fallback picker: fbIndex -1 appends, >= 0 replaces.
-  function openFallbackPicker(row, fbIndex) {
+  // Opens the shared fallback picker under the chip that asked for it:
+  // fbIndex -1 appends, >= 0 replaces. sceneX/sceneY/h are that chip's
+  // rectangle, in scene coordinates.
+  function openFallbackPicker(row, fbIndex, sceneX, sceneY, h) {
     if (row < 0 || row >= root.rows.length) return
+
+    // A second click on the chip that opened the list closes it, the way the
+    // model picker beside it now does. Only expressible because this picker
+    // does not dismiss on an outside press: it would already be shut by the
+    // time this ran, and reopening would read as a list that never closes.
+    if (fallbackPicker.popupOpen
+        && root.pendingFallbackRow === row
+        && root.pendingFallbackIndex === fbIndex) {
+      fallbackPicker.close()
+      root.pendingFallbackRow = -1
+      root.pendingFallbackIndex = -1
+      fallbackPicker.value = ""
+      return
+    }
+
     root.pendingFallbackRow = row
     root.pendingFallbackIndex = fbIndex
     if (fbIndex >= 0 && fbIndex < root.rows[row].fallbacks.length)
       fallbackPicker.value = root.rows[row].fallbacks[fbIndex].model
     else
       fallbackPicker.value = ""
+
+    // Below the chip when the list fits there, above it when it does not —
+    // a chip near the footer would otherwise open a list running off the
+    // bottom of the panel. Clamped into the editor on both axes.
+    var p = root.mapFromItem(null, sceneX, sceneY)
+    var lift = Style.spacing.xxs
+    var below = p.y + h + lift
+    var above = p.y - fallbackPicker.popupHeight - lift
+    fallbackPicker.x = Math.max(0, Math.min(p.x, root.width - fallbackPicker.popupWidth))
+    fallbackPicker.y = (below + fallbackPicker.popupHeight <= root.height)
+      ? below
+      : Math.max(0, above)
     fallbackPicker.open()
   }
 
@@ -365,6 +433,7 @@ Item {
       favorites: root.favorites
       recents: root.recents
       showMeta: root.showMeta
+      labelWidth: root.labelWidth
       foreground: root.foreground
       accent: root.accent
       fontFamily: root.fontFamily
@@ -376,27 +445,39 @@ Item {
       onVariantPicked: function (v) { root.applyRowVariant(parent.index, v) }
       onFallbackRemoved: function (i) { root.removeFallback(parent.index, i) }
       onFallbackMoveRequested: function (i, d) { root.moveFallback(parent.index, i, d) }
-      onFallbackAddRequested: root.openFallbackPicker(parent.index, -1)
-      onFallbackEditRequested: function (i) { root.openFallbackPicker(parent.index, i) }
+      onFallbackAddRequested: function (x, y, h) { root.openFallbackPicker(parent.index, -1, x, y, h) }
+      onFallbackEditRequested: function (i, x, y, h) { root.openFallbackPicker(parent.index, i, x, y, h) }
       onFavoriteToggled: function (id) { root.favoriteToggled(id) }
       onPickerOpenChanged: agentList.anyPickerOpen = pickerOpen
       }
     }
   }
 
+  // Light dismiss. This picker keeps CloseOnEscape only, because the chip that
+  // opens it is not the popup's parent and CloseOnPressOutside would shut the
+  // list on the press, leaving the click to reopen it — the same race the model
+  // picker's CloseOnPressOutsideParent removes, which is not available here.
+  // So the outside press is handled by hand instead. It is not propagated, so a
+  // press outside only dismisses, which is exactly what the model picker beside
+  // it does.
+  MouseArea {
+    anchors.fill: parent
+    enabled: fallbackPicker.popupOpen
+    visible: enabled
+    onPressed: root.clearFallbackPicker()
+  }
+
   // ---- Fallback picker ----------------------------------------------------
-  // One hidden ModelPicker for every + on a fallback row and every chip
-  // click: + appends {model, variant} to that row, a chip click replaces
-  // the chip in place (same picker, current model ticked). It lives here —
-  // not in the AgentRow delegate — so the clipping ListView above cannot cut
-  // its popup, and the trigger stays invisible (opacity 0, zero height)
-  // because it is only ever opened by code.
+  // One hidden ModelPicker for every + on a fallback row and every chip click:
+  // + appends {model, variant} to that row, a chip click replaces the chip in
+  // place (same picker, current model ticked). It lives here — not in the
+  // AgentRow delegate — so the ListView above cannot cut its popup, and so a
+  // row does not carry one of these per chip. The trigger stays invisible
+  // because it is only ever opened by code; openFallbackPicker() moves this
+  // whole item under the chip first, and the popup follows it.
   ModelPicker {
     id: fallbackPicker
-    anchors.left: parent.left
-    anchors.right: parent.right
-    anchors.top: header.bottom
-    anchors.topMargin: Style.spacing.md
+    width: popupWidth
     height: 0
     opacity: 0
     // Enabled must stay true: `enabled: false` propagates into the QQC.Popup
@@ -407,6 +488,7 @@ Item {
     // field and result rows, and zeroing it stacked every model on one line.
     enabled: true
     triggerHeight: 0
+    dismissOnOutsidePress: false
     catalog: root.catalog
     catalogIndex: root.catalogIndex
     favorites: root.favorites

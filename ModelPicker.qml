@@ -35,6 +35,12 @@ Item {
   // invisible trigger out of the way; zeroing rowHeight for that collapsed the
   // popup's own rows on top of each other instead.
   property int triggerHeight: rowHeight
+  // Whether an outside press dismisses the list. True is right when the trigger
+  // is this control's own, because the trigger is then the popup's parent and
+  // is exempt. A caller that opens this from somewhere else entirely turns it
+  // off and dismisses by hand — otherwise the press on *its* trigger shuts the
+  // list and the click reopens it.
+  property bool dismissOnOutsidePress: true
   property int popupWidth: Style.space(460)
   property int visibleRows: 11
 
@@ -47,6 +53,9 @@ Item {
 
   // Lets the host panel suspend its key handling, so "j" typed here does not move its cursor too.
   readonly property bool popupOpen: popup.opened
+  // So a caller placing this by hand can tell whether the list still fits
+  // below what summoned it, or has to go above it instead.
+  readonly property real popupHeight: popup.implicitHeight
   property bool hasCursor: false
 
   signal changed(string modelId)
@@ -238,7 +247,9 @@ Item {
         // to open it, not close it"). Not a timestamp guard: that keeps the
         // wrong policy and breaks Escape and keyboard toggling to paper over a
         // race this flag removes outright.
-        closePolicy: QQC.Popup.CloseOnEscape | QQC.Popup.CloseOnPressOutsideParent
+        closePolicy: root.dismissOnOutsidePress
+          ? (QQC.Popup.CloseOnEscape | QQC.Popup.CloseOnPressOutsideParent)
+          : QQC.Popup.CloseOnEscape
 
         background: BorderSurface {
           color: root.background

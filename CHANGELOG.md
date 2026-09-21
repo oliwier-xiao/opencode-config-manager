@@ -1,5 +1,48 @@
 # Changelog
 
+## 1.4.1
+
+Three lists in this panel open on a click. One of them could also be closed by one.
+
+### Fixed
+
+- **The effort control closes on the click that opened it.** `Ui/Dropdown` is the
+  shell's, and leaves `closePolicy` at the default: its popup is a child of its own
+  trigger, so a press on that trigger counts as a press *outside the popup*, shuts the
+  list, and leaves the release to reopen it. It is forked here as `EffortDropdown`,
+  verbatim but for the one line — the same arrangement `ModelPicker` already has with
+  `Ui/SearchableDropdown` — with a header saying that re-syncing against the shell's
+  file is a one-line reapply.
+- **The fallback list opens under the chip that asked for it.** It opened in a fixed
+  place under the header, so a chip clicked near the footer produced a list somewhere
+  else entirely with nothing saying what it belonged to. The chip reports its rectangle
+  now and the list opens beneath it, or above it where it would not otherwise fit.
+- **And closes on a second click of that chip.** Which is only expressible because that
+  picker no longer dismisses on an outside press: it would already be shut by the time
+  the click arrived, and reopening reads as a list that never closes. The outside press
+  is handled by a dismiss layer instead, which does not propagate — so a press outside
+  only dismisses, exactly as the model picker beside it behaves.
+- **"in use" is legible.** It was drawn in the faintest colour on the row, which is the
+  one thing a glance at that list is looking for. It is a badge in the accent now, on
+  the same fill-and-border pill the error strip uses, and the profile name beside it is
+  bounded so a long one cannot push it off the row.
+- **An agent reads as one thing.** Its model and the chain beneath it sat 4px apart
+  while one agent sat 8px from the next; at that size a 2:1 ratio is no ratio, and
+  nothing said where an agent ended. The inner gap stays tight and the outer one is
+  generous.
+- **The name column is measured, not assumed.** A fixed 140px on every roster became the
+  longest label actually present: still 140 under oh-my-openagent, where
+  `visual-engineering` needs 143, but 107 on plain opencode, where the longest is
+  "Default model". Capped at the old value, so it can never come out worse.
+- **Free (OpenRouter) names two models that exist.** `minimax-m3:free` and
+  `glm-5.2:free` have left OpenRouter's free tier — both are still there as paid models,
+  so a template called Free was naming two things nobody on that plan can run. Laguna S
+  2.1 builds and Nex N2.5 Pro is the second thinker; neither was already in the template,
+  which rules out the otherwise obvious `nemotron-3-ultra` — that one is already oracle's
+  and momus's own model, and would have had them fall back to themselves. Nex tops out at
+  `high` where glm offered `xhigh`, so those three sites step down to `high`, which is
+  what `Catalog.nearestVariant` would do to them at runtime anyway.
+
 ## 1.4.0
 
 Everything this plugin knows about oh-my-openagent it reads out of the installed
