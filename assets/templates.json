@@ -252,7 +252,7 @@
       "name": "Free (OpenRouter)",
       "shortName": "FO",
       "vendor": "openrouter",
-      "description": "The same on OpenRouter's free tier. Inkling thinks and is the one free model here with every effort, MiniMax M3 builds, Ling reads.",
+      "description": "The same on OpenRouter's free tier. Inkling thinks and is the one free model here with every effort, Laguna builds, Ling reads.",
       "requires": [
         "openrouter"
       ],
@@ -268,7 +268,7 @@
             "model": "openrouter/thinkingmachines/inkling:free"
           },
           "build": {
-            "model": "openrouter/minimax/minimax-m3:free"
+            "model": "openrouter/poolside/laguna-s-2.1:free"
           }
         }
       },
@@ -279,16 +279,16 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3:free"
+                "model": "openrouter/poolside/laguna-s-2.1:free"
               },
               {
-                "model": "openrouter/z-ai/glm-5.2:free",
+                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
                 "variant": "high"
               }
             ]
           },
           "hephaestus": {
-            "model": "openrouter/minimax/minimax-m3:free",
+            "model": "openrouter/poolside/laguna-s-2.1:free",
             "fallback_models": [
               {
                 "model": "openrouter/thinkingmachines/inkling-small:free",
@@ -304,7 +304,7 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5.2:free",
+                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
                 "variant": "high"
               },
               {
@@ -314,7 +314,7 @@
             ]
           },
           "atlas": {
-            "model": "openrouter/minimax/minimax-m3:free",
+            "model": "openrouter/poolside/laguna-s-2.1:free",
             "fallback_models": [
               {
                 "model": "openrouter/thinkingmachines/inkling-small:free",
@@ -334,8 +334,8 @@
                 "variant": "max"
               },
               {
-                "model": "openrouter/z-ai/glm-5.2:free",
-                "variant": "xhigh"
+                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
+                "variant": "high"
               }
             ]
           },
@@ -354,8 +354,8 @@
             ]
           },
           "momus": {
-            "model": "openrouter/z-ai/glm-5.2:free",
-            "variant": "xhigh",
+            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
+            "variant": "high",
             "fallback_models": [
               {
                 "model": "openrouter/thinkingmachines/inkling:free",
@@ -395,7 +395,7 @@
             "model": "openrouter/google/gemma-4-31b-it:free",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3:free"
+                "model": "openrouter/poolside/laguna-s-2.1:free"
               },
               {
                 "model": "openrouter/dots-studio/dots-3-note-preview:free"
@@ -403,7 +403,7 @@
             ]
           },
           "sisyphus-junior": {
-            "model": "openrouter/minimax/minimax-m3:free",
+            "model": "openrouter/poolside/laguna-s-2.1:free",
             "fallback_models": [
               {
                 "model": "openrouter/thinkingmachines/inkling-small:free",
@@ -417,7 +417,7 @@
         },
         "categories": {
           "visual-engineering": {
-            "model": "openrouter/minimax/minimax-m3:free",
+            "model": "openrouter/poolside/laguna-s-2.1:free",
             "fallback_models": [
               {
                 "model": "openrouter/google/gemma-4-31b-it:free"
@@ -439,8 +439,8 @@
             "variant": "max",
             "fallback_models": [
               {
-                "model": "openrouter/z-ai/glm-5.2:free",
-                "variant": "xhigh"
+                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
+                "variant": "high"
               }
             ]
           },
@@ -485,14 +485,14 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/minimax/minimax-m3:free"
+                "model": "openrouter/poolside/laguna-s-2.1:free"
               }
             ]
           }
         },
         "fallback_models": [
           {
-            "model": "openrouter/minimax/minimax-m3:free"
+            "model": "openrouter/poolside/laguna-s-2.1:free"
           },
           {
             "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
