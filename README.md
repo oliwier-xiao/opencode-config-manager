@@ -4,7 +4,8 @@ Saved opencode model profiles, one click from your Omarchy bar.
 
 Keep a "daily work" set of models, a "full Opus" set for the hard afternoons, and a free one for
 when you are just poking around. Click the bar to switch between them. Turn on **Restart opencode**
-and a running session re-reads its config where it stands — nothing closes, nothing is lost.
+and a running session re-reads its config where it stands — nothing closes, nothing is lost. The
+conversation you are in keeps the model it started on; the switch lands on everything opened after it.
 
 ![The bar widget](docs/bar.png)
 
@@ -14,7 +15,10 @@ oh-my-openagent it shows oh-my-openagent's — its agents supersede opencode's, 
 would offer two rows for one decision. The pill in the top right of the panel says which it found.
 
 The list of agents is read off the software you have installed — opencode's own generated schema,
-and oh-my-openagent's own shipped schema — never from a list baked into this plugin. Agents you
+and the schema and declaration files oh-my-openagent ships — never from a list baked into this
+plugin. Where its schema lives is read from that package's own `exports` map rather than assumed,
+so a release that renames the file is one this plugin follows; a release that moves it somewhere
+nothing can find is one the Health strip names out loud. Agents you
 defined yourself are read straight out of your config and come first.
 
 ### What the mark is telling you
@@ -279,6 +283,7 @@ no strip at all.
 | **A file-level `fallback_models`** | under `[opencode]`, which `doctor` reports as `Unknown config key` against `Affects: plugin startup`. Deleted, with a splice, so the rest of the file is untouched. |
 | **A legacy `oh-my-openagent.json`** | left behind by the migration. Reported, never deleted: it may be the only copy of an old setup. |
 | **`variant` rather than `reasoning`** | one line, whatever the count. Both spellings load — this is worth knowing and not worth doing anything about. |
+| **This plugin can no longer read oh-my-openagent** | it declares its agents, its categories and its fields in files this plugin reads; when a release moves them, every probe answers nothing and the panel falls back to the roster it shipped with. That looks like a working panel missing whatever the last few releases added, so it is the one failure nobody would think to report. Named here instead. |
 
 Every repair copies the file first and is undone by the same **Restore the previous config** a
 switch is, and a repair that does not land puts the file back itself. From a terminal it is the
@@ -295,7 +300,15 @@ oc-profiles repair --fix E_MODELS_IN_CONFIG --apply    # change it
 opencode reads its config when it starts. With **Restart opencode** turned on, this plugin does not
 restart it either — it sends the same `SIGUSR2` that Omarchy sends after a theme change, and
 opencode re-reads its config in place. Your session, its history, and everything you had open
-survive; the next message uses the new models.
+survive.
+
+What that does and does not move is worth being exact about. **A session fixes its model when it
+is created and keeps it for its whole life** — so the conversation you are sitting in stays on the
+model it started on, however many times you switch afterwards. A switch reaches everything created
+after it: the next session you open, and the subagents each run spawns, which are sessions too and
+are where most of the work on a busy agent run actually happens. To move the conversation you are
+already in, start a new one — or pick a model in the TUI, which is opencode's own control over its
+own session and nothing this plugin writes.
 
 Only the interactive TUI listens for that signal. A headless `opencode serve` does not, and the
 default behaviour of `SIGUSR2` is to terminate — so each process is checked for the handler before
@@ -308,7 +321,7 @@ The default is **Notify**, which writes the files and tells you which sessions h
 | | |
 |---|---|
 | **Notify** | write the files, and say what would need reloading. The default. |
-| **Restart opencode** | write the files and ask every running TUI to re-read them, in place |
+| **Restart opencode** | write the files and ask every running TUI to re-read them, in place. The open conversation keeps the model it started on; what is created after it does not |
 | **Nothing** | write the files and say nothing |
 
 ## Working on it
@@ -317,8 +330,13 @@ The default is **Notify**, which writes the files and tells you which sessions h
 ./test/run.sh
 ```
 
-321 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+353 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
+One suite is pointed outward rather than in: `upstream.test.sh` asserts what this plugin assumes
+about the two programs it sits between, against the copies actually installed — that the schema
+is still where the package says, that the agent and category rosters still answer, that the field
+list it refuses on is the one the install declares, and that the built-in fallback still says what
+the probe would. It is the suite that goes red when nothing in this repository changed.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
 a machine that does not have it installed, and so does the QML suite where there is no Qt6

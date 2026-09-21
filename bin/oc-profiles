@@ -14,7 +14,7 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
-VERSION="1.3.0"
+VERSION="1.4.0"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -85,6 +85,13 @@ OHMY_FORBIDDEN_AGENT='["models","provider"]'
 # `models`, so refusing it there refused a key the software accepts, and said so with
 # a reason that was only ever true of agents. `provider` is on neither schema.
 OHMY_FORBIDDEN_CATEGORY='["provider"]'
+# The keys that decide which model an entry runs on. oh-my-openagent drops every key
+# it does not declare, but dropping most of them costs a colour or a description —
+# dropping one of these costs the agent its model, in silence, which is the only
+# reason this gate exists. So the refusal is drawn from this set and no wider: a
+# profile carrying some field a newer oh-my-openagent understands and this one does
+# not is still applied, because the worst it can do is be ignored.
+OHMY_MODEL_KEYS='["models","provider","model","fallback_models"]'
 
 # ---------------------------------------------------------------- plumbing
 
@@ -400,6 +407,92 @@ omo_package_dir() {
   return 0
 }
 
+# The shipped JSON Schema answers both questions this plugin asks of oh-my-openagent
+# — which agents exist, and which fields an entry may carry — so how that file is
+# found decides how much of an upstream rename the plugin survives. It is named in
+# the package's own `exports` map under "./schema.json", and that pointer is the
+# only thing guaranteed to move with the file: today the package calls itself
+# `oh-my-openagent` while the schema inside it is still `oh-my-opencode.schema.json`,
+# which is that rename caught half-done. Asking the package where its schema is
+# costs one `jq` and survives the other half landing.
+omo_schema_file() {
+  local pkg="$1" rel="" p pf
+  [ -n "$pkg" ] || return 1
+  pf="$(read_capped "$pkg/package.json" "$MAX_PACKAGE_BYTES" "the oh-my-openagent package manifest")" || pf=""
+  if [ -n "$pf" ]; then
+    # An exports entry is a string or a conditions object; both spellings are real.
+    rel="$(jq -r '(.exports["./schema.json"] // empty)
+                  | if type == "object" then (.default // .import // .require // empty) else . end
+                  | if type == "string" then . else empty end' "$pf" 2>/dev/null)"
+    rm -f "$pf"
+  fi
+  for p in "$rel" \
+           "dist/oh-my-openagent.schema.json" "dist/oh-my-opencode.schema.json" \
+           "assets/omo.schema.json" "assets/oh-my-opencode.schema.json"; do
+    [ -n "$p" ] || continue
+    p="${p#./}"
+    # The first candidate is a string out of somebody else's package.json, so it is
+    # held to the same rule as the rest: inside this package, and nowhere else.
+    case "$p" in /*|*..*) continue ;; esac
+    [ -f "$pkg/$p" ] && { printf '%s' "$pkg/$p"; return 0; }
+  done
+  # Every name above having moved at once is still not a reason to go blind: one
+  # schema is shipped, and the tarball is small enough to just look.
+  for p in "$pkg"/dist/*.schema.json "$pkg"/assets/*.schema.json; do
+    [ -f "$p" ] && { printf '%s' "$p"; return 0; }
+  done
+  return 1
+}
+
+# Which fields an agent entry and a category entry may carry, read off the schema
+# the install actually ships. Agents are enumerated and categories are open-keyed,
+# so the entry schema sits under `properties` for one and `additionalProperties` for
+# the other — take whichever this file used rather than assuming it stayed put.
+omo_fields_json() {
+  local pkg="$1" schema_p schema_f out
+  [ -n "$pkg" ] || return 1
+  schema_p="$(omo_schema_file "$pkg")" || return 1
+  schema_f="$(read_capped "$schema_p" "$MAX_PACKAGE_BYTES" "the oh-my-openagent schema")" || return 1
+  out="$(jq -c '
+    def entry($n):
+        (($n.properties // {}) | to_entries) as $e
+      | if ($e | length) > 0 then $e[0].value else ($n.additionalProperties // {}) end;
+    { agent:    ( entry(.properties.agents     // {}) | (.properties // {}) | keys ),
+      category: ( entry(.properties.categories // {}) | (.properties // {}) | keys ) }' \
+    "$schema_f" 2>/dev/null)"
+  rm -f "$schema_f"
+  case "$out" in ''|null) return 1 ;; esac
+  printf '%s' "$out"
+}
+
+# One `z.ZodEnum<{ "visual-engineering": "visual-engineering"; ... }>` out of a
+# shipped declaration file. The category names have only ever been reachable here by
+# running a regex over the MINIFIED bundle, which is the most breakable line in this
+# file: one bundler or symbol change and the categories are gone, with no error
+# raised anywhere. The .d.ts is generated from the same source, ships in the same
+# tarball, and is not minified — so it is asked first and the bundle is the fallback.
+omo_dts_enum() {
+  local file="$1" symbol="$2" f out
+  [ -f "$file" ] || return 1
+  f="$(read_capped "$file" "$MAX_PACKAGE_BYTES" "the oh-my-openagent declarations")" || return 1
+  out="$(python3 - "$f" "$symbol" <<'PYEOF'
+import json, re, sys
+try:
+    blob = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+except OSError:
+    print("[]"); raise SystemExit
+# Bounded to this symbol's own braces. The file declares a dozen enums — efforts,
+# skills, agent names — and a greedy match would run from the first into the last
+# and hand back a roster made of every one of them.
+m = re.search(re.escape(sys.argv[2]) + r"\s*:\s*z\.ZodEnum<\s*\{(.*?)\}\s*>", blob, re.S)
+print(json.dumps([v for _, v in re.findall(r'("?[\w-]+"?)\s*:\s*"([^"]+)"', m.group(1))] if m else []))
+PYEOF
+)"
+  rm -f "$f"
+  case "$out" in ''|null) return 1 ;; esac
+  printf '%s' "$out"
+}
+
 # The rosters come off the installed software, never out of this file. opencode
 # names its agents in its own generated schema; oh-my-openagent ships a JSON Schema
 # naming its agents and carries the category names as an enum in its bundle. A
@@ -410,8 +503,12 @@ omo_package_dir() {
 # versions, so an upgrade re-reads rather than serving yesterday's roster.
 roster_json() {
   local pkg="$1" oc_version="$2" omo_version="$3"
-  local key cache_file oc_agents om_agents om_cats
-  key="$(printf '%s|%s' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
+  local key cache_file oc_agents om_agents om_cats om_fields
+  # The probe format is part of the key. A cache written before this file learned to
+  # carry the field sets is still valid JSON and still the right roster, so nothing
+  # would ever re-probe for the half that was added — the entry would simply be
+  # missing, for as long as neither version moved.
+  key="$(printf '%s|%s|v2' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
   cache_file="$CACHE/roster-$key.json"
   # Read like everything else: through the descriptor, bounded, and refused if it
   # is not a plain file this user owns. It sits next to the model cache, which
@@ -434,17 +531,34 @@ roster_json() {
     *) probed_oc=1 ;;
   esac
 
-  om_agents='[]'; om_cats='[]'
+  om_agents='[]'; om_cats='[]'; om_fields='{"agent":[],"category":[]}'
   if [ -n "$pkg" ]; then
-    local schema_f bundle_f
-    schema_f="$(read_capped "$pkg/dist/oh-my-opencode.schema.json" "$MAX_PACKAGE_BYTES" "the oh-my-openagent schema")" || schema_f=""
+    local schema_p schema_f bundle_f dts
+    schema_p="$(omo_schema_file "$pkg")" || schema_p=""
+    schema_f=""
+    [ -n "$schema_p" ] && { schema_f="$(read_capped "$schema_p" "$MAX_PACKAGE_BYTES" "the oh-my-openagent schema")" || schema_f=""; }
     if [ -n "$schema_f" ]; then
       om_agents="$(jq -c '[.properties.agents.properties | keys[]]' "$schema_f" 2>/dev/null)"
       rm -f "$schema_f"
     fi
+    # Carried in the roster so the panel can see it, but derived by its own function
+    # because the gate that refuses a write needs it on a path that has no roster.
+    om_fields="$(omo_fields_json "$pkg")" || om_fields='{"agent":[],"category":[]}'
     case "$om_agents" in ''|null) om_agents='[]' ;; esac
-    bundle_f="$(read_capped "$pkg/dist/index.js" "$MAX_PACKAGE_BYTES" "the oh-my-openagent bundle")" || bundle_f=""
-    om_cats="$(python3 - "${bundle_f:-/dev/null}" <<'PYEOF'
+    case "$om_fields" in ''|null) om_fields='{"agent":[],"category":[]}' ;; esac
+    # An agent roster the schema could not give up is still in the declarations,
+    # which are generated from the same source and are not minified.
+    if [ "$om_agents" = '[]' ]; then
+      om_agents="$(omo_dts_enum "$pkg/dist/config/schema/agent-names.d.ts" OverridableAgentNameSchema)" || om_agents='[]'
+    fi
+
+    # Categories, best source first. The declarations are structured text; the
+    # bundle is one minified line and a regex over it is the single most breakable
+    # thing this file does, so it is now the fallback rather than the only way.
+    om_cats="$(omo_dts_enum "$pkg/dist/config/schema/categories.d.ts" BuiltinCategoryNameSchema)" || om_cats='[]'
+    if [ "$om_cats" = '[]' ]; then
+      bundle_f="$(read_capped "$pkg/dist/index.js" "$MAX_PACKAGE_BYTES" "the oh-my-openagent bundle")" || bundle_f=""
+      om_cats="$(python3 - "${bundle_f:-/dev/null}" <<'PYEOF'
 import json, re, sys
 try:
     with open(sys.argv[1], encoding="utf-8", errors="replace") as fh:
@@ -456,13 +570,23 @@ m = re.search(r"BuiltinCategoryNameSchema\s*=\s*[A-Za-z_$][\w$]*\.enum\(\s*\[(.*
 print(json.dumps(re.findall(r'"([^"]+)"', m.group(1)) if m else []))
 PYEOF
 )"
-    [ -n "$bundle_f" ] && rm -f "$bundle_f"
+      [ -n "$bundle_f" ] && rm -f "$bundle_f"
+    fi
     case "$om_cats" in ''|null) om_cats='[]' ;; esac
   fi
 
   local out
   out="$(jq -cn --argjson oca "$oc_agents" --argjson oma "$om_agents" --argjson omc "$om_cats" \
-    '{opencode:{agents:$oca}, ohmy:{agents:$oma, categories:$omc}}')"
+                --argjson omf "$om_fields" --argjson pkgSeen "$([ -n "$pkg" ] && echo true || echo false)" \
+    '{ opencode: { agents: $oca },
+       ohmy: { agents: $oma, categories: $omc, fields: $omf },
+       # What answered and what did not, so `doctor` can say the panel has gone
+       # blind rather than quietly drawing the list this plugin was published with.
+       probes: { opencodeAgents: (($oca | length) > 0),
+                 ohmyInstalled: $pkgSeen,
+                 ohmyAgents: (($oma | length) > 0),
+                 ohmyCategories: (($omc | length) > 0),
+                 ohmyFields: ((($omf.agent | length) > 0) and (($omf.category | length) > 0)) } }')"
   # Only memoise a probe that actually answered. Caching "I could not ask" pins the
   # panel to an empty roster until one of the two versions moves, which for a
   # transient failure could be weeks. --no-follow: this is the plugin's own file at
@@ -757,11 +881,13 @@ preflight() {
     # Asked separately, because the answer is half the message. Merged into one list
     # the branch is lost, and a category refusal then explains itself as an agent —
     # the same wrong reason the split was made to stop giving.
-    local bad_agent bad_category
-    bad_agent=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_AGENT" '
+    local bad_agent bad_category f_agent f_category
+    f_agent="$(ohmy_forbidden_for agent)"
+    f_category="$(ohmy_forbidden_for category)"
+    bad_agent=$(printf '%s' "$payload" | jq -r --argjson f "$f_agent" '
       (.agents // {}) | to_entries[] | .value | select(type=="object")
       | keys[] | select(. as $k | $f | index($k))' 2>/dev/null | head -1)
-    bad_category=$(printf '%s' "$payload" | jq -r --argjson f "$OHMY_FORBIDDEN_CATEGORY" '
+    bad_category=$(printf '%s' "$payload" | jq -r --argjson f "$f_category" '
       (.categories // {}) | to_entries[] | .value | select(type=="object")
       | keys[] | select(. as $k | $f | index($k))' 2>/dev/null | head -1)
     # What actually happens is a strip, not a rejection: the entry survives without the
@@ -772,6 +898,32 @@ preflight() {
     [ -z "$bad_category" ] || refuse "E_FIELD_4X" \
       "This profile sets \"$bad_category\" on a category; oh-my-openagent has no such field and drops it on load."
   fi
+}
+
+# What this gate refuses on, worked out per install rather than kept by hand. A
+# hand-kept list is right for the version it was written against and wrong for the
+# next one: 4.19 has no `models` on an agent, and the 5.0 line makes it the
+# canonical field there — so the list as shipped would refuse, on that release, the
+# one spelling oh-my-openagent wants. Model-carrying keys the installed schema does
+# not declare, and nothing else. An upgrade that adds `models` to an agent stops it
+# being refused without this file being touched; one that takes a field away starts.
+#
+# The static lists remain the answer when the schema cannot be read at all — a
+# refusal that is right for the last four years beats no refusal.
+ohmy_forbidden_for() {
+  local kind="$1" fields declared fallback
+  case "$kind" in
+    agent)    fallback="$OHMY_FORBIDDEN_AGENT" ;;
+    category) fallback="$OHMY_FORBIDDEN_CATEGORY" ;;
+    *)        printf '%s' '[]'; return 0 ;;
+  esac
+  fields="$(omo_fields_json "$(omo_package_dir)" 2>/dev/null)" || fields=""
+  [ -n "$fields" ] || { printf '%s' "$fallback"; return 0; }
+  declared="$(printf '%s' "$fields" | jq -c --arg k "$kind" '.[$k] // []' 2>/dev/null)" || declared=""
+  case "$declared" in ''|null|'[]') printf '%s' "$fallback"; return 0 ;; esac
+  jq -cn --argjson m "$OHMY_MODEL_KEYS" --argjson d "$declared" \
+    '[ $m[] | select(. as $k | $d | index($k) | not) ]' 2>/dev/null \
+    || printf '%s' "$fallback"
 }
 
 # A restore writes a whole file rather than a few keys, so it gets the same gate
@@ -1560,6 +1712,35 @@ cmd_doctor() {
                   fixable:false, fix:""}]')"
     fi
   fi
+
+  # Whether this plugin can still read what oh-my-openagent declares about itself.
+  # Every probe here fails into an empty answer, and an empty answer is refused
+  # rather than drawn — so the panel falls back to the roster this plugin shipped
+  # with and looks exactly as it always did, minus whatever the last few releases
+  # added. That is the one failure this file cannot detect from the outside, and
+  # the only one a user would never think to report: nothing is broken on screen.
+  #
+  # It is worth saying only when oh-my-openagent is actually installed. A machine
+  # running plain opencode has no schema to read and no reason to hear about one.
+  {
+    local pkg="" probe_fields="" probe_cats=""
+    pkg="$(omo_package_dir)" || pkg=""
+    if [ -n "$pkg" ]; then
+      probe_fields="$(omo_fields_json "$pkg" 2>/dev/null)" || probe_fields=""
+      probe_cats="$(omo_dts_enum "$pkg/dist/config/schema/categories.d.ts" BuiltinCategoryNameSchema 2>/dev/null)" || probe_cats=""
+      local blind=""
+      case "$probe_fields" in ''|null) blind="the field list" ;; esac
+      if [ -z "$blind" ]; then
+        case "$probe_cats" in ''|null|'[]') blind="the category list" ;; esac
+      fi
+      if [ -n "$blind" ]; then
+        issues="$(jq -cn --argjson acc "$issues" --arg w "$blind" --arg p "$pkg" \
+          '$acc + [{code:"W_PROBE_BLIND", file:$p, profile:"", agent:"",
+                    detail:("This plugin can no longer read " + $w + " out of the installed oh-my-openagent, so it is drawing the one it shipped with. Agents or categories added since then will be missing."),
+                    fixable:false, fix:""}]')"
+      fi
+    fi
+  } 2>/dev/null || true
 
   # Best effort only: whether the installed oh-my-openagent predates the 4.x
   # unified config. No network, no failure — when the version cannot be told,

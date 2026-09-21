@@ -40,6 +40,7 @@ Item {
     && (root.profile.name !== root.original.name || root.profile.shortName !== root.original.shortName)
   readonly property bool dirty: root.changes.length > 0 || root.nameChanged
   readonly property bool anyPickerOpen: agentList.anyPickerOpen || bulkPicker.popupOpen
+    || fallbackPicker.popupOpen
     || nameField.activeFocus || tagField.activeFocus
 
   // Same rule as the list: ask for what the content needs, let the panel cap it.
@@ -62,15 +63,59 @@ Item {
   signal discardRequested()
   signal profileEdited(var next)
   signal favoriteToggled(string modelId)
-  signal fallbackRequested(int rowIndex)
+  // Row waiting on the fallback picker: + sets it with index -1 (append), a chip
+  // click sets it with the chip index (replace in place); a dismissal clears it.
+  property int pendingFallbackRow: -1
+  property int pendingFallbackIndex: -1
   signal cursorMoved(int index)
   signal refreshCatalogRequested()
 
   function rowKey(row) { return row.file + " " + row.group + " " + row.key }
 
+  // Model reset survival: model: root.rows is a fresh JS array from
+  // Model.rowsFor on every profileEdited, so ListView sees a model reset and
+  // drops contentY to 0. Save the viewport before the reset lands ...
+  onProfileChanged: {
+    if (!agentList) return
+    agentList.savedY = agentList.contentY
+    agentList.savedIndex = root.selectedIndex
+  }
+
+  // ... and restore after contentHeight has caught up (delegate heights shift
+  // when the fallback line wraps). ContentY only: a positionViewAtIndex after
+  // it fights the restore (cursor row != edited row) and reads as bouncing.
+  onRowsChanged: {
+    if (!agentList) return
+    var y = agentList.savedY
+    Qt.callLater(function() {
+      if (!agentList || agentList.contentHeight <= agentList.height) return
+      var maxY = Math.max(0, agentList.contentHeight - agentList.height)
+      var target = Math.min(Math.max(0, y), maxY)
+      if (Math.abs(agentList.contentY - target) > 1) agentList.contentY = target
+    })
+  }
+
   // Called when the editor closes: a delegate torn down while its popup was
   // open cannot clear this itself.
-  function clearPickerState() { agentList.anyPickerOpen = false }
+  function clearPickerState() {
+    agentList.anyPickerOpen = false
+    fallbackPicker.close()
+    root.pendingFallbackRow = -1
+    root.pendingFallbackIndex = -1
+    fallbackPicker.value = ""
+  }
+
+  // Opens the shared fallback picker: fbIndex -1 appends, >= 0 replaces.
+  function openFallbackPicker(row, fbIndex) {
+    if (row < 0 || row >= root.rows.length) return
+    root.pendingFallbackRow = row
+    root.pendingFallbackIndex = fbIndex
+    if (fbIndex >= 0 && fbIndex < root.rows[row].fallbacks.length)
+      fallbackPicker.value = root.rows[row].fallbacks[fbIndex].model
+    else
+      fallbackPicker.value = ""
+    fallbackPicker.open()
+  }
 
   function applyRowModel(index, modelId) {
     if (!root.profile || index < 0 || index >= root.rows.length) return
@@ -95,6 +140,18 @@ Item {
     if (!root.profile || index < 0 || index >= root.rows.length) return
     var list = root.rows[index].fallbacks.slice()
     list.splice(fbIndex, 1)
+    root.profileEdited(Model.setRowFallbacks(root.profile, root.rows[index], list))
+  }
+
+  function moveFallback(index, fbIndex, delta) {
+    if (!root.profile || index < 0 || index >= root.rows.length) return
+    var list = root.rows[index].fallbacks.slice()
+    if (fbIndex < 0 || fbIndex >= list.length) return
+    var to = fbIndex + delta
+    if (to < 0 || to >= list.length) return
+    var tmp = list[fbIndex]
+    list[fbIndex] = list[to]
+    list[to] = tmp
     root.profileEdited(Model.setRowFallbacks(root.profile, root.rows[index], list))
   }
 
@@ -253,16 +310,19 @@ Item {
     model: root.rows
     currentIndex: root.selectedIndex
 
-    highlightRangeMode: ListView.ApplyRange
-    // Zero, not a margin: a non-zero begin scrolls the list on load so the
-    // first row and its heading sit above the fold before anything is touched.
-    preferredHighlightBegin: 0
-    preferredHighlightEnd: height - Style.space(50)
+    highlightRangeMode: ListView.NoHighlightRange
+    // NoHighlightRange: cursor is custom (CursorSurface + hasCursor), not the
+    // ListView highlight. ApplyRange repositions contentY on every model reset
+    // (model: root.rows is a fresh array per edit), jumping to top.
     highlightMoveDuration: 0
 
     // A dropdown must be able to paint past the row that owns it, and a
     // clipping ListView would cut it off at the row edge.
     property bool anyPickerOpen: false
+
+    // Viewport saved across model resets; see onProfileChanged/onRowsChanged.
+    property real savedY: 0
+    property int savedIndex: -1
 
     // Model names its own sections: under oh-my-openagent the two opencode keys
     // are the bottom of a fallback chain, not the defaults, and they say so.
@@ -315,9 +375,93 @@ Item {
       onModelPicked: function (id) { root.applyRowModel(parent.index, id) }
       onVariantPicked: function (v) { root.applyRowVariant(parent.index, v) }
       onFallbackRemoved: function (i) { root.removeFallback(parent.index, i) }
-      onFallbackAddRequested: root.fallbackRequested(parent.index)
+      onFallbackMoveRequested: function (i, d) { root.moveFallback(parent.index, i, d) }
+      onFallbackAddRequested: root.openFallbackPicker(parent.index, -1)
+      onFallbackEditRequested: function (i) { root.openFallbackPicker(parent.index, i) }
       onFavoriteToggled: function (id) { root.favoriteToggled(id) }
       onPickerOpenChanged: agentList.anyPickerOpen = pickerOpen
+      }
+    }
+  }
+
+  // ---- Fallback picker ----------------------------------------------------
+  // One hidden ModelPicker for every + on a fallback row and every chip
+  // click: + appends {model, variant} to that row, a chip click replaces
+  // the chip in place (same picker, current model ticked). It lives here —
+  // not in the AgentRow delegate — so the clipping ListView above cannot cut
+  // its popup, and the trigger stays invisible (opacity 0, zero height)
+  // because it is only ever opened by code.
+  ModelPicker {
+    id: fallbackPicker
+    anchors.left: parent.left
+    anchors.right: parent.right
+    anchors.top: header.bottom
+    anchors.topMargin: Style.spacing.md
+    height: 0
+    opacity: 0
+    // Enabled must stay true: `enabled: false` propagates into the QQC.Popup
+    // children and kills the search field + list interaction (popup opens but
+    // nothing is clickable). The trigger is neutralised by triggerHeight 0
+    // instead: zero-height, invisible, intercepts no mouse, popup still
+    // positions fine. Not rowHeight — that one also sizes the popup's search
+    // field and result rows, and zeroing it stacked every model on one line.
+    enabled: true
+    triggerHeight: 0
+    catalog: root.catalog
+    catalogIndex: root.catalogIndex
+    favorites: root.favorites
+    recents: root.recents
+    showMeta: root.showMeta
+    foreground: root.foreground
+    accent: root.accent
+    fontFamily: root.fontFamily
+    // It opens in a fixed place under the header rather than beside the chip
+    // that summoned it, so it has to say out loud which agent it is about to
+    // change — otherwise the row you clicked is off behind the popup.
+    placeholderText: {
+      if (root.pendingFallbackRow < 0 || root.pendingFallbackRow >= root.rows.length)
+        return "Pick a fallback model"
+      var name = root.rows[root.pendingFallbackRow].label
+      return root.pendingFallbackIndex >= 0
+        ? "Replace a fallback behind " + name
+        : "Add a fallback behind " + name
+    }
+    value: ""
+    onChanged: function (id) {
+      var r = root.pendingFallbackRow
+      var f = root.pendingFallbackIndex
+      root.pendingFallbackRow = -1
+      root.pendingFallbackIndex = -1
+      fallbackPicker.value = ""
+      if (!id || r < 0 || r >= root.rows.length) return
+      // A chain that falls back to what it is already running is a chain that
+      // does nothing: the model it just failed on is the model it retries.
+      if (root.rows[r].model === id) return
+      var list = root.rows[r].fallbacks.slice()
+      if (f >= 0 && f < list.length) {
+        if (list[f].model === id) return
+        for (var d = 0; d < list.length; d++) if (d !== f && list[d].model === id) return
+        list[f] = { model: id, variant: Catalog.nearestVariant(root.catalogIndex, id, list[f].variant || "high") }
+      } else {
+        for (var i = 0; i < list.length; i++) if (list[i].model === id) return
+        list.push({ model: id, variant: Catalog.nearestVariant(root.catalogIndex, id, "high") })
+      }
+      root.profileEdited(Model.setRowFallbacks(root.profile, root.rows[r], list))
+    }
+    onFavoriteToggled: function (id) { root.favoriteToggled(id) }
+    onPopupOpenChanged: {
+      // A pick commits synchronously right after close() and clears the row
+      // itself; only a dismissal still has it set when this fires.
+      if (!fallbackPicker.popupOpen && root.pendingFallbackRow >= 0) {
+        var r = root.pendingFallbackRow
+        var f = root.pendingFallbackIndex
+        Qt.callLater(function () {
+          if (root.pendingFallbackRow === r && root.pendingFallbackIndex === f) {
+            root.pendingFallbackRow = -1
+            root.pendingFallbackIndex = -1
+            fallbackPicker.value = ""
+          }
+        })
       }
     }
   }

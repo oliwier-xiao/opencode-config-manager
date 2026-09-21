@@ -29,6 +29,12 @@ Item {
   property color accent: Color.accent
   property string fontFamily: Style.font.family
   property int rowHeight: Style.spacing.controlHeight
+  // The closed control's own height, separate from rowHeight because rowHeight
+  // also sizes the popup's search field, its result rows and its height cap. A
+  // picker that is only ever opened from code sets this to 0 to keep its
+  // invisible trigger out of the way; zeroing rowHeight for that collapsed the
+  // popup's own rows on top of each other instead.
+  property int triggerHeight: rowHeight
   property int popupWidth: Style.space(460)
   property int visibleRows: 11
 
@@ -82,7 +88,7 @@ Item {
   }
 
   implicitWidth: Style.space(300)
-  implicitHeight: showLabel && label !== "" ? rowHeight + Style.spacing.huge : rowHeight
+  implicitHeight: showLabel && label !== "" ? triggerHeight + Style.spacing.huge : triggerHeight
 
   Column {
     anchors.fill: parent
@@ -103,7 +109,7 @@ Item {
     BorderSurface {
       id: trigger
       width: parent.width
-      height: root.rowHeight
+      height: root.triggerHeight
       radius: Style.cornerRadius
       activeFocusOnTab: true
 
@@ -213,6 +219,26 @@ Item {
         topPadding: Border.top(root.popupBorderSpec) + Style.spacing.hairline
         bottomPadding: Border.bottom(root.popupBorderSpec) + Style.spacing.hairline
         focus: true
+        // Clicking the trigger of an open list has to close it — that is what
+        // APG's select-only combobox, Material's menus and the WHATWG's own
+        // customisable-select proposal all say a trigger does, and what every
+        // native picker on this desktop does.
+        //
+        // It did not, and the default closePolicy is why: this popup is a child
+        // of the trigger, so a press on the trigger is a press *outside the
+        // popup*. CloseOnPressOutside fires on press and hides the list; the
+        // release that follows is what MouseArea turns into onClicked, and by
+        // then toggle() sees a closed popup and opens it again. Every click
+        // opened, none closed.
+        //
+        // CloseOnPressOutsideParent exempts the parent — the trigger — from
+        // that, so the click-fired toggle below is the only thing acting on it,
+        // while a press anywhere else still dismisses. Qt's own ComboBox draws
+        // the same boundary internally ("the user clicked on the popup button
+        // to open it, not close it"). Not a timestamp guard: that keeps the
+        // wrong policy and breaks Escape and keyboard toggling to paper over a
+        // race this flag removes outright.
+        closePolicy: QQC.Popup.CloseOnEscape | QQC.Popup.CloseOnPressOutsideParent
 
         background: BorderSurface {
           color: root.background
