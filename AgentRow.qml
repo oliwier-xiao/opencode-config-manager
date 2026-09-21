@@ -38,6 +38,8 @@ Item {
   signal variantPicked(string variant)
   signal fallbackAddRequested()
   signal fallbackRemoved(int index)
+  signal fallbackEditRequested(int index)
+  signal fallbackMoveRequested(int index, int delta)
   signal favoriteToggled(string modelId)
   signal entered()
 
@@ -164,85 +166,195 @@ Item {
       }
     }
 
-    // ---- Fallbacks: one line per agent. A row each would double the editor's height
-    // to show what is almost always a single model.
+    // ---- Fallbacks: label on the left, one pill per line on the right. A
+    // wrapping Flow put the second pill wherever the first one ended, so the
+    // stack never lined up; a Column does — every pill starts at the same x,
+    // under the first pill rather than under the "falls back to" text.
     Item {
+      id: fallbacksLine
       width: parent.width
       height: fallbackRow.implicitHeight
       visible: root.row && root.row.file === "ohmy"
 
+      readonly property int count: root.row ? root.row.fallbacks.length : 0
+      // A reorder needs something to reorder against. Below two chips the
+      // chevrons are not drawn at all — and the chip is that much narrower,
+      // rather than carrying room for a move that cannot happen.
+      readonly property bool reorderable: count > 1
+
       Row {
         id: fallbackRow
         anchors.left: parent.left
+        anchors.right: parent.right
         anchors.leftMargin: Style.space(140) + Style.spacing.lg
-        anchors.verticalCenter: parent.verticalCenter
+        anchors.rightMargin: Style.spacing.md
         spacing: Style.spacing.md
 
         Text {
-          anchors.verticalCenter: parent.verticalCenter
           textFormat: Text.PlainText
           text: "falls back to"
+          // Nudged down to the first pill's text baseline: a pill pads its
+          // text by sm top and bottom, so the bare label needs the same.
+          topPadding: Style.spacing.sm
           color: root.veryMuted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption
         }
 
-        Repeater {
-          model: root.row ? root.row.fallbacks : []
+        Column {
+          spacing: Style.spacing.sm
 
-          BorderSurface {
-            required property var modelData
-            required property int index
-            anchors.verticalCenter: parent.verticalCenter
-            implicitWidth: chip.implicitWidth + Style.spacing.lg * 2
-            implicitHeight: chip.implicitHeight + Style.spacing.sm * 2
-            radius: Style.cornerRadius
-            color: Style.normalFillFor(root.foreground, root.accent)
-            borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
+          Repeater {
+            model: root.row ? root.row.fallbacks : []
 
-            Row {
-              id: chip
-              anchors.centerIn: parent
-              spacing: Style.spacing.sm
+            BorderSurface {
+              id: chipSurface
+              required property var modelData
+              required property int index
+              implicitWidth: chip.implicitWidth + Style.spacing.lg * 2
+              implicitHeight: chip.implicitHeight + Style.spacing.sm * 2
+              radius: Style.cornerRadius
+              color: Style.normalFillFor(root.foreground, root.accent)
+              borderSpec: Border.controlSpec("normal", root.foreground, root.accent)
 
-              Text {
-                anchors.verticalCenter: parent.verticalCenter
-                textFormat: Text.PlainText
-                text: Model.shortModel(modelData.model)
-                     + (modelData.variant ? " " + modelData.variant : "")
-                color: root.muted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
-              }
+              HoverHandler { id: chipHover }
 
-              Text {
-                textFormat: Text.PlainText
-                anchors.verticalCenter: parent.verticalCenter
-                text: "󰅖"
-                color: chipHover.hovered ? Color.urgent : root.veryMuted
-                font.family: root.fontFamily
-                font.pixelSize: Style.font.caption
+              Row {
+                id: chip
+                anchors.centerIn: parent
+                spacing: Style.spacing.sm
 
-                HoverHandler { id: chipHover }
-                MouseArea {
-                  anchors.fill: parent
-                  anchors.margins: -Style.spacing.xs
-                  cursorShape: Qt.PointingHandCursor
-                  onClicked: root.fallbackRemoved(index)
+                // The chips stack downwards, so the two moves are up and down;
+                // ‹ › pointed across a list that does not run that way. Space
+                // is held for both the moment there is more than one chip, so
+                // a chip never resizes under the pointer that is reaching for
+                // it — the one at the end of the chain hides its own arrow
+                // instead, and refuses the click that would do nothing.
+                Text {
+                  id: chipUp
+                  textFormat: Text.PlainText
+                  readonly property bool movable: chipSurface.index > 0
+                  visible: fallbacksLine.reorderable
+                  opacity: chipHover.hovered && movable ? 1 : 0
+                  text: "󰅃"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xs
+                    enabled: chipUp.movable
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.fallbackMoveRequested(chipSurface.index, -1)
+                  }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: Model.shortModel(chipSurface.modelData.model)
+                       + (chipSurface.modelData.variant ? " " + chipSurface.modelData.variant : "")
+                  color: chipEditHover.hovered ? root.foreground : root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+
+                  HoverHandler { id: chipEditHover }
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xs
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.fallbackEditRequested(chipSurface.index)
+                  }
+                }
+
+                Text {
+                  id: chipDown
+                  textFormat: Text.PlainText
+                  readonly property bool movable: chipSurface.index < fallbacksLine.count - 1
+                  visible: fallbacksLine.reorderable
+                  opacity: chipHover.hovered && movable ? 1 : 0
+                  text: "󰅀"
+                  color: root.muted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xs
+                    enabled: chipDown.movable
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.fallbackMoveRequested(chipSurface.index, 1)
+                  }
+                }
+
+                Text {
+                  textFormat: Text.PlainText
+                  text: "󰅖"
+                  color: chipHover.hovered ? Color.urgent : root.veryMuted
+                  font.family: root.fontFamily
+                  font.pixelSize: Style.font.caption
+
+                  MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -Style.spacing.xs
+                    cursorShape: Qt.PointingHandCursor
+                    onClicked: root.fallbackRemoved(chipSurface.index)
+                  }
                 }
               }
             }
           }
-        }
 
-        PanelActionButton {
-          anchors.verticalCenter: parent.verticalCenter
-          iconText: "󰐕"
-          tooltipText: "Add a fallback model"
-          fontSize: Style.font.bodySmall
-          foreground: root.veryMuted
-          hoverColor: root.foreground
-          onClicked: root.fallbackAddRequested()
+          // The + is a chip-shaped empty slot at the end of the stack rather
+          // than a bare icon: it lines up under the chips it extends, and on
+          // an agent that has no fallbacks yet it is the only thing on the
+          // line that says what the line is for.
+          BorderSurface {
+            id: addChip
+            implicitWidth: addRow.implicitWidth + Style.spacing.lg * 2
+            implicitHeight: addRow.implicitHeight + Style.spacing.sm * 2
+            radius: Style.cornerRadius
+            color: addHover.hovered ? Style.hoverFillFor(root.foreground, root.accent) : "transparent"
+            borderSpec: Border.controlSpec(addHover.hovered ? "hover-cursor" : "normal",
+                                           root.veryMuted, root.accent)
+
+            HoverHandler { id: addHover }
+
+            Row {
+              id: addRow
+              anchors.centerIn: parent
+              spacing: Style.spacing.sm
+
+              Text {
+                textFormat: Text.PlainText
+                text: "󰐕"
+                color: addHover.hovered ? root.foreground : root.veryMuted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+
+              Text {
+                textFormat: Text.PlainText
+                visible: fallbacksLine.count === 0
+                text: "pick a model"
+                color: addHover.hovered ? root.foreground : root.veryMuted
+                font.family: root.fontFamily
+                font.pixelSize: Style.font.caption
+              }
+            }
+
+            MouseArea {
+              anchors.fill: parent
+              cursorShape: Qt.PointingHandCursor
+              onClicked: root.fallbackAddRequested()
+            }
+
+            PanelToolTip {
+              visible: addHover.hovered && fallbacksLine.count > 0
+              text: "Add another model to fall back to"
+              fontFamily: root.fontFamily
+            }
+          }
         }
       }
     }

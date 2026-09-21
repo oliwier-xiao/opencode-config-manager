@@ -723,7 +723,6 @@ Panel {
         onFavoriteToggled: function (id) { root.toggleFavorite(id) }
         onCursorMoved: function (index) { root.cursorActive = true; root.selectedIndex = index }
         onRefreshCatalogRequested: root.refresh()
-        onFallbackRequested: function (index) { root.addFallback(index) }
       }
 
       TemplateList {
@@ -801,30 +800,6 @@ Panel {
     confirm.cancelText = "Keep it"
     confirm.selectedIndex = 0
     confirm.opened = true
-  }
-
-  // Appends through the same picker the row uses. Kept on the panel so the row does
-  // not own a second popup it shows once in twenty uses.
-  function addFallback(rowIndex) {
-    if (!root.draft) return
-    var rows = Model.rowsFor(root.draft)
-    if (rowIndex < 0 || rowIndex >= rows.length) return
-    var row = rows[rowIndex]
-    var list = row.fallbacks.slice()
-    // Default to the profile's own most-used model, which is almost always the
-    // one you want behind an agent that is on something experimental.
-    var suggestion = Model.dominantModel(root.draft)
-    for (var i = 0; i < list.length; i++) if (list[i].model === suggestion) suggestion = ""
-    if (!suggestion) {
-      for (var f = 0; f < root.favorites.length; f++) {
-        var taken = false
-        for (var j = 0; j < list.length; j++) if (list[j].model === root.favorites[f]) taken = true
-        if (!taken && root.favorites[f] !== row.model) { suggestion = root.favorites[f]; break }
-      }
-    }
-    if (!suggestion) return
-    list.push({ model: suggestion, variant: Catalog.nearestVariant(root.catalogIndex, suggestion, "high") })
-    root.draft = Model.setRowFallbacks(root.draft, row, list)
   }
 
   readonly property string backupLabel: {
