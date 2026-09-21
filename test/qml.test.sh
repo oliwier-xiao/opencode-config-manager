@@ -331,6 +331,141 @@ else
   no "ProfileList.healthText can be found" "extraction failed — was it renamed?"
 fi
 
+# ---- every list closes on the click that opened it --------------------------
+#
+# Three lists in the panel open on a click, and each keeps its trigger out of the
+# press that would close it in a different way. All three are declarative, so no
+# spliced function reaches them — they are asserted against the shipped source
+# instead. Getting one wrong is invisible until somebody clicks twice, which is
+# the whole of the bug they were written for.
+
+echo "=== every list closes on the click that opened it ==="
+
+if grep -qE 'closePolicy: root\.dismissOnOutsidePress' "$REPO/ModelPicker.qml" \
+   && grep -qE 'QQC\.Popup\.CloseOnEscape \| QQC\.Popup\.CloseOnPressOutsideParent' "$REPO/ModelPicker.qml"; then
+  ok "ModelPicker exempts its own trigger from the press that closes it"
+else
+  no "ModelPicker exempts its own trigger from the press that closes it" \
+     "CloseOnPressOutsideParent is no longer how that popup closes; the default shuts it on the press and the release reopens it"
+fi
+
+if grep -qE 'closePolicy: Popup\.CloseOnEscape \| Popup\.CloseOnPressOutsideParent' "$REPO/EffortDropdown.qml"; then
+  ok "EffortDropdown still carries the one line the fork exists for"
+else
+  no "EffortDropdown still carries the one line the fork exists for" \
+     "the fork has drifted back to the shell's default, which is the bug it was forked to escape"
+fi
+
+if grep -qE '^ *EffortDropdown \{' "$REPO/AgentRow.qml"; then
+  ok "the effort control is that fork, not the shell's Dropdown"
+else
+  no "the effort control is that fork, not the shell's Dropdown" \
+     "AgentRow went back to Ui/Dropdown, so the fork is dead code and the control cannot be closed by clicking"
+fi
+
+if grep -qE 'dismissOnOutsidePress: false' "$REPO/ProfileEditor.qml" \
+   && grep -qE 'onPressed: root\.clearFallbackPicker\(\)' "$REPO/ProfileEditor.qml"; then
+  ok "the fallback picker owns its own dismissal, both halves of it"
+else
+  no "the fallback picker owns its own dismissal, both halves of it" \
+     "it needs the policy off *and* the dismiss layer; with only one the chip click closes and reopens"
+fi
+
+# ---- and the fallback list toggles, and opens where the chip is --------------
+
+OPENFB="$(extract_fn "$REPO/ProfileEditor.qml" openFallbackPicker)" || OPENFB=""
+if [ -n "$OPENFB" ]; then
+  ok "ProfileEditor.openFallbackPicker extracted from the shipped file"
+
+  # The spliced function reaches for one spacing token off the shell's Style
+  # singleton, which is not on this runtime's import path. It gets a stub of the
+  # same shape, in its own directory so the qmldir cannot reach the other cases.
+  mkdir -p "$T/stub"
+  cat > "$T/stub/Style.qml" <<'QML'
+pragma Singleton
+import QtQuick
+QtObject { readonly property var spacing: ({ xxs: 2 }) }
+QML
+  printf 'singleton Style 1.0 Style.qml\n' > "$T/stub/qmldir"
+
+  cat > "$T/Fallback.qml" <<QML
+import QtQuick
+import "stub"
+
+Item {
+  id: root
+  width: 400
+  height: 600
+
+  property int failed: 0
+  function check(c) { if (!c) root.failed++ }
+
+  property var rows: [ { fallbacks: [ { model: "a/one" }, { model: "b/two" } ] } ]
+  property int pendingFallbackRow: -1
+  property int pendingFallbackIndex: -1
+  property int opens: 0
+  property int closes: 0
+
+  QtObject {
+    id: fallbackPicker
+    property bool popupOpen: false
+    property string value: ""
+    property real popupHeight: 300
+    property real popupWidth: 460
+    property real x: 0
+    property real y: 0
+    function open() { fallbackPicker.popupOpen = true; root.opens++ }
+    function close() { fallbackPicker.popupOpen = false; root.closes++ }
+  }
+
+$OPENFB
+
+  Component.onCompleted: {
+    try {
+      // A chip opens the list.
+      root.openFallbackPicker(0, 1, 10, 100, 20)
+      check(fallbackPicker.popupOpen === true)
+      check(root.opens === 1 && root.closes === 0)
+      check(root.pendingFallbackRow === 0 && root.pendingFallbackIndex === 1)
+
+      // The same chip again closes it — and must not reopen, which is what the
+      // default close policy used to make it do.
+      root.openFallbackPicker(0, 1, 10, 100, 20)
+      check(fallbackPicker.popupOpen === false)
+      check(root.closes === 1)
+      check(root.opens === 1)
+      check(root.pendingFallbackRow === -1 && root.pendingFallbackIndex === -1)
+
+      // A different chip while it is open moves the list rather than closing it.
+      root.openFallbackPicker(0, 1, 10, 100, 20)
+      root.openFallbackPicker(0, 0, 10, 60, 20)
+      check(fallbackPicker.popupOpen === true)
+      check(root.pendingFallbackIndex === 0)
+
+      // It opens below a chip with room under it ...
+      var below = fallbackPicker.y
+      check(below > 60)
+
+      // ... and above one that would push it off the bottom.
+      root.openFallbackPicker(0, 0, 10, 60, 20)   // close it first
+      root.openFallbackPicker(0, 0, 10, 560, 20)
+      check(fallbackPicker.y < 560)
+
+      // And it never leaves the editor by the left or the right.
+      check(fallbackPicker.x >= 0)
+      check(fallbackPicker.x <= root.width)
+    } catch (err) { root.failed = 99 }
+    Qt.exit(root.failed)
+  }
+}
+QML
+  QT_QPA_PLATFORM=offscreen timeout 60 "$QMLBIN" "$T/Fallback.qml" >/dev/null 2>&1 \
+    && ok "a chip opens the list, the same chip closes it, another moves it" \
+    || no "a chip opens the list, the same chip closes it, another moves it" "rc=$?"
+else
+  no "ProfileEditor.openFallbackPicker can be found" "extraction failed — was it renamed?"
+fi
+
 printf '\n%d passed' "$pass"
 [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"
 printf '\n'
