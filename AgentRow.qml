@@ -17,6 +17,11 @@ Item {
   property var favorites: []
   property var recents: []
   property bool showMeta: true
+  // How wide the name column is. Every row is handed the same number so the
+  // controls line up, but the editor measures it off the longest name in the
+  // roster rather than reserving a fixed 140px: "atlas" was leaving two thirds
+  // of that column empty between itself and its model.
+  property real labelWidth: Style.space(140)
   property bool hasCursor: false
   property bool changed: false
   property color foreground: Color.popups.text
@@ -36,14 +41,22 @@ Item {
 
   signal modelPicked(string modelId)
   signal variantPicked(string variant)
-  signal fallbackAddRequested()
+  // The two that open a list carry the scene rectangle of the chip that asked
+  // for it, so the editor can put the list under that chip rather than in a
+  // fixed place of its own — a list that opens somewhere else does not say
+  // what it belongs to.
+  signal fallbackAddRequested(real sceneX, real sceneY, real height)
   signal fallbackRemoved(int index)
-  signal fallbackEditRequested(int index)
+  signal fallbackEditRequested(int index, real sceneX, real sceneY, real height)
   signal fallbackMoveRequested(int index, int delta)
   signal favoriteToggled(string modelId)
   signal entered()
 
-  implicitHeight: content.implicitHeight + Style.spacing.lg
+  // An agent is two lines — its model, and the chain behind it — and they were
+  // 4px apart while one agent was 8px from the next. At that size a 2:1 ratio
+  // is no ratio: nothing said where one agent ended. The inner gap stays tight
+  // and the outer one becomes generous, which is the whole of the grouping.
+  implicitHeight: content.implicitHeight + Style.spacing.huge
 
   CursorSurface {
     anchors.fill: parent
@@ -78,7 +91,7 @@ Item {
         id: labels
         anchors.left: parent.left
         anchors.verticalCenter: parent.verticalCenter
-        width: Style.space(140)
+        width: root.labelWidth
         spacing: Style.spacing.xxs
 
         Row {
@@ -143,7 +156,7 @@ Item {
         onFavoriteToggled: function (id) { root.favoriteToggled(id) }
       }
 
-      Dropdown {
+      EffortDropdown {
         id: variantPicker
         anchors.right: parent.right
         anchors.verticalCenter: parent.verticalCenter
@@ -186,7 +199,7 @@ Item {
         id: fallbackRow
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.leftMargin: Style.space(140) + Style.spacing.lg
+        anchors.leftMargin: root.labelWidth + Style.spacing.lg
         anchors.rightMargin: Style.spacing.md
         spacing: Style.spacing.md
 
@@ -263,7 +276,10 @@ Item {
                     anchors.fill: parent
                     anchors.margins: -Style.spacing.xs
                     cursorShape: Qt.PointingHandCursor
-                    onClicked: root.fallbackEditRequested(chipSurface.index)
+                    onClicked: {
+                      var p = chipSurface.mapToItem(null, 0, 0)
+                      root.fallbackEditRequested(chipSurface.index, p.x, p.y, chipSurface.height)
+                    }
                   }
                 }
 
@@ -346,7 +362,10 @@ Item {
             MouseArea {
               anchors.fill: parent
               cursorShape: Qt.PointingHandCursor
-              onClicked: root.fallbackAddRequested()
+              onClicked: {
+                var p = addChip.mapToItem(null, 0, 0)
+                root.fallbackAddRequested(p.x, p.y, addChip.height)
+              }
             }
 
             PanelToolTip {
