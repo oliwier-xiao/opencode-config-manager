@@ -7,6 +7,10 @@ when you are just poking around. Click the bar to switch between them. Turn on *
 and a running session re-reads its config where it stands — nothing closes, nothing is lost. The
 conversation you are in keeps the model it started on; the switch lands on everything opened after it.
 
+| Install | Update | Remove |
+|---|---|---|
+| `omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git --enable` | `omarchy plugin update oliwier.opencode-configs` | `omarchy plugin remove oliwier.opencode-configs` |
+
 ![The bar widget](docs/bar.png)
 
 Works with **classic opencode** and with **oh-my-openagent**, and it works out which one you are
@@ -66,14 +70,8 @@ omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git -
 Leave the flag off and it installs disabled, so you can read the code first and turn it on later
 with `omarchy plugin enable oliwier.opencode-configs`.
 
-To remove it:
-
-```bash
-omarchy plugin remove oliwier.opencode-configs
-```
-
-Your opencode config stays as the last switch left it, and your profiles survive a reinstall —
-[Removing it](#removing-it) says how to clear those too.
+Update anytime with `omarchy plugin update oliwier.opencode-configs`.
+To take it off the bar, see [Removing it](#removing-it) — your config and profiles stay put.
 
 ---
 
