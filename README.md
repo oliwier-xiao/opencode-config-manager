@@ -22,8 +22,8 @@ The list of agents is read off the software you have installed — opencode's ow
 and the schema and declaration files oh-my-openagent ships — never from a list baked into this
 plugin. Where its schema lives is read from that package's own `exports` map rather than assumed,
 so a release that renames the file is one this plugin follows; a release that moves it somewhere
-nothing can find is one the Health strip names out loud. Agents you
-defined yourself are read straight out of your config and come first.
+nothing can find is one the Health strip names out loud. Agents you defined yourself are read
+straight out of your config and come first.
 
 ### What the mark is telling you
 
@@ -103,9 +103,8 @@ open, with no configuration.
 
 ![Profiles, plain opencode](docs/plain-profiles.png)
 
-Every profile says how many entries it pins and to what. The dot on the left is what the profile
-costs to run — dim for free, brighter as it gets expensive, and opencode's own purple for the
-profile that is at the top of your ladder.
+Every profile says how many entries it pins and to what. The dot on the left grades cost the
+same way the bar mark does — see [What the mark is telling you](#what-the-mark-is-telling-you).
 
 ### Pinned is not the same as running
 
@@ -128,9 +127,8 @@ Effort works on agent rows in both shapes — opencode's own agent entries carry
 oh-my-openagent's do. oh-my-openagent 4.19 renamed its own to `reasoning`; both spellings are read,
 and an entry is written back in the one it already uses, so a config that version migrated for
 itself keeps its effort either way. The two rows it is disabled on are **Default model** and
-**Small model**:
-those are bare model strings with nowhere to put one. The control stays visible rather than
-vanishing, so the rows keep lining up.
+**Small model**: those are bare model strings with nowhere to put one. The control stays visible
+rather than vanishing, so the rows keep lining up.
 
 ---
 
@@ -141,18 +139,17 @@ manages `~/.omo/omo.jsonc` instead — every agent, every category, and the fall
 each one. That file is JSONC and it holds one section per harness, so this only ever reads and
 writes what is under `"[opencode]"`, and your comments come back untouched.
 
-`~/.config/opencode/oh-my-openagent.json` was the old location. oh-my-openagent's
-`2026-07-opencode-config-unification` migration moved it, and once that has run nothing reads the
-old file any more. If one is still lying around, the panel says so rather than editing it.
+`~/.config/opencode/oh-my-openagent.json` was the old location before oh-my-openagent's
+`2026-07-opencode-config-unification` migration moved it. A leftover copy is reported, never edited.
 
 Below the agents and categories sits a small **opencode base** section holding `model` and
 `small_model`. oh-my-openagent falls back to those when a category has no model of its own, so
 they are worth seeing — but opencode's `agent` entries are not shown, because oh-my-openagent
 supplies its own `build` and `plan` and they win.
 
-Which of the two you are running is worked out from the software, not from a leftover file: the
-plugin has to be in your `opencode.json` `plugin` list, or its package has to be installed. You
-can still force the plain view by turning `manageOhMyOpenAgent` off.
+Detection reads the software, not leftover files: the plugin has to be in your `opencode.json`
+`plugin` list, or its package has to be installed. You can still force the plain view by turning
+`manageOhMyOpenAgent` off.
 
 ![Profiles, oh-my-openagent](docs/panel-profiles.png?v=3)
 
@@ -175,7 +172,7 @@ Eight ready-made profiles ship with the plugin. Each one matches models to what 
 does — the heavy thinking on a strong model, the file-scanning on a cheap fast one — so someone
 who has just connected a key does not have to pick every model by hand. Under oh-my-openagent a
 template fills eleven agents and eight categories; on plain opencode it sets the default model and
-two agents. Each row says which.
+two agents.
 
 | | |
 |---|---|
@@ -209,9 +206,9 @@ the missing one named on the row.
 ![The model picker](docs/panel-picker.png)
 
 The list comes from your own opencode, so it holds exactly what your keys can reach — connect a
-provider and its models appear here by themselves: opening the panel refreshes a stale list in the
+provider and its models appear here by themselves. Opening the panel refreshes a stale list in the
 background (what you can reach is re-checked every few minutes, the full catalogue on
-`catalogRefreshHours`), and <kbd>r</kbd>, middle-click or `refresh` over IPC force it now. Press <kbd>Tab</kbd> to search the whole
+`catalogRefreshHours`); <kbd>r</kbd>, middle-click or `refresh` over IPC force it now. Press <kbd>Tab</kbd> to search the whole
 models.dev catalogue instead, for when you are deciding which provider to add next. (That
 catalogue is filtered to models that can call tools and return text — the ones an agent can
 actually use.) If your shell cannot run `opencode models` at all, the picker opens on the full
@@ -268,11 +265,9 @@ So the panel checks, on every open, and shows what it found — and only then:
 Each line is one problem, in the words of what actually happened rather than a code. **Fix** is
 there when there is a repair to run.
 
-Only something repairable brings the strip up. The two warnings below are true of a config that
-works and stay true for as long as it does, so on their own they would be a permanent box whose
-whole content is "nothing is broken" — they come along as context once a real problem has opened
-it, and are otherwise left to `oc-profiles doctor`. A config with nothing wrong with it draws
-no strip at all.
+The strip only appears when something is repairable — a healthy config draws no strip at all.
+The last two rows below are also true of configs that work, so on their own they stay quiet inside
+`oc-profiles doctor` and only come along as context once a real problem has opened the strip.
 
 | | |
 |---|---|
@@ -280,12 +275,12 @@ no strip at all.
 | **An agent set to a bare model string** | `"build": "provider/model"` becomes `"build": { "model": "provider/model" }`. opencode's `AgentConfig` has no string branch, so the short form is a config it refuses to load. |
 | **A file-level `fallback_models`** | under `[opencode]`, which `doctor` reports as `Unknown config key` against `Affects: plugin startup`. Deleted, with a splice, so the rest of the file is untouched. |
 | **A legacy `oh-my-openagent.json`** | left behind by the migration. Reported, never deleted: it may be the only copy of an old setup. |
-| **`variant` rather than `reasoning`** | one line, whatever the count. Both spellings load — this is worth knowing and not worth doing anything about. |
+| **`variant` rather than `reasoning`** | both spellings load — nothing to fix. |
 | **This plugin can no longer read oh-my-openagent** | it declares its agents, its categories and its fields in files this plugin reads; when a release moves them, every probe answers nothing and the panel falls back to the roster it shipped with. That looks like a working panel missing whatever the last few releases added, so it is the one failure nobody would think to report. Named here instead. |
 
-Every repair copies the file first and is undone by the same **Restore the previous config** a
-switch is, and a repair that does not land puts the file back itself. From a terminal it is the
-same two verbs the panel calls, and a dry run is the default:
+Every repair copies the file first and undoes through the same **Restore the previous config**;
+a repair that does not land puts the file back itself. From a terminal it is the same two verbs
+the panel calls, and a dry run is the default:
 
 ```bash
 oc-profiles doctor                                     # what is wrong, as JSON
@@ -301,25 +296,22 @@ opencode re-reads its config in place. Your session, its history, and everything
 survive.
 
 What that does and does not move is worth being exact about. **A session fixes its model when it
-is created and keeps it for its whole life** — so the conversation you are sitting in stays on the
-model it started on, however many times you switch afterwards. A switch reaches everything created
-after it: the next session you open, and the subagents each run spawns, which are sessions too and
-are where most of the work on a busy agent run actually happens. To move the conversation you are
-already in, start a new one — or pick a model in the TUI, which is opencode's own control over its
-own session and nothing this plugin writes.
+is created and keeps it for its whole life** — the conversation you are sitting in stays on the
+model it started on, however many times you switch. A switch reaches everything created after it:
+the next session you open, and the subagents each run spawns. To move the conversation you are
+already in, start a new one — or pick a model in the TUI, which is opencode's own control and
+nothing this plugin writes.
 
 Only the interactive TUI listens for that signal. A headless `opencode serve` does not, and the
 default behaviour of `SIGUSR2` is to terminate — so each process is checked for the handler before
 it is signalled, and a server you are running is left alone.
-
-The default is **Notify**, which writes the files and tells you which sessions have not seen them.
 
 `After switching a profile` in the widget's settings chooses between:
 
 | | |
 |---|---|
 | **Notify** | write the files, and say what would need reloading. The default. |
-| **Restart opencode** | write the files and ask every running TUI to re-read them, in place. The open conversation keeps the model it started on; what is created after it does not |
+| **Restart opencode** | write the files and ask every running TUI to re-read them in place (open conversations keep their model — see above) |
 | **Nothing** | write the files and say nothing |
 
 ## Working on it
@@ -330,11 +322,10 @@ The default is **Notify**, which writes the files and tells you which sessions h
 
 353 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
 shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
-One suite is pointed outward rather than in: `upstream.test.sh` asserts what this plugin assumes
-about the two programs it sits between, against the copies actually installed — that the schema
-is still where the package says, that the agent and category rosters still answer, that the field
-list it refuses on is the one the install declares, and that the built-in fallback still says what
-the probe would. It is the suite that goes red when nothing in this repository changed.
+One suite points outward: `upstream.test.sh` asserts what this plugin assumes about the two
+programs it sits between, against the copies actually installed — schema location, agent and
+category rosters, the refused-field list, and the built-in fallback. It is the suite that goes red
+when nothing in this repository changed.
 Every one of them runs against a temporary config directory, and the runner fails if any
 suite touched the config you actually use. The oh-my-openagent halves skip themselves on
 a machine that does not have it installed, and so does the QML suite where there is no Qt6
@@ -357,17 +348,17 @@ omarchy-shell oliwier.opencode-configs reload
 
 `open`, `close`, `show`, `hide` and `toggle` move the panel. `refresh` makes it
 re-read your config and rebuild the model list. `reload` asks every running opencode
-to re-read its config, the same `SIGUSR2` **Restart opencode** sends.
+to re-read its config — the same signal **Restart opencode** sends (see above).
 
 None of them writes a config or switches a profile — a switch is a thing you do in
 the panel. `reload` is the only one that reaches another process, and the pid it
 signals is pinned to the process that was checked: same start tick, still an
-opencode, still handling the signal, checked in the instruction before the one that
-sends it. `SIGUSR2` terminates a process that does not handle it, and pids get reused.
+opencode, still handling the signal. (`SIGUSR2` terminates a process that does not
+handle it, and pids get reused.)
 
-`bin/oc-profiles` is the whole of what writes, and it runs by hand too — `detect`,
-`list`, `apply <id>`, `revert`, `backups`. It prints JSON and exits 0 for done,
-2 for refused with nothing written, 3 for a partial write that was put back.
+`bin/oc-profiles` is the whole of what writes — `detect`, `list`, `apply <id>`,
+`revert`, `backups` (full list under [From a terminal](#from-a-terminal)). It prints JSON
+and exits 0 for done, 2 for refused with nothing written, 3 for a partial write that was put back.
 
 ## Settings
 
@@ -376,7 +367,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | Setting | Default | |
 |---|---|---|
 | `barLabel` | Profile name | what sits next to the bar icon: the profile's short tag, the model, or nothing |
-| `afterSwitch` | Notify | see **Reloading opencode** above |
+| `afterSwitch` | Notify | see [Reloading opencode](#reloading-opencode) |
 | `confirmSwitch` | off | ask before switching. Off is the fast path the bar is for |
 | `manageOpencodeJson` | on | manage `model`, `small_model` and `agent` in `opencode.json` |
 | `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — plus a file-level `fallback_models` on the legacy `oh-my-openagent.json`, where that key still exists. Off forces the plain-opencode view |
@@ -446,9 +437,9 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
 the keys a profile claims.
 
-The first and the last of those it reads under a ceiling, and on the descriptor it opened rather
-than on the name — `omarchy-shell` is one process for every plugin on the desktop, so a file that
-has been swapped for a symlink, a FIFO or a much bigger one is refused before a byte of it is read.
+Profiles and the cached model list are read through the same `safe-read` ceiling described
+above — size and type judged on the opened descriptor, so a swapped-in symlink, FIFO or oversized
+file is refused before a byte of it is read.
 
 ## License
 
