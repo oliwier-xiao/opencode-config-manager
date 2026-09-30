@@ -37,7 +37,7 @@ lacks(){ printf '%s' "$2" | jq -e --arg k "$3" 'index($k) == null' >/dev/null 2>
 # failure names the probe that broke instead of the command that used it.
 probe(){ bash -c '
   set -uo pipefail
-  eval "$(sed -n "/^mktemp_tracked()/,/^}/p;/^read_capped()/,/^}/p;/^omo_package_dir()/,/^}/p;/^omo_schema_file()/,/^}/p;/^omo_fields_json()/,/^}/p;/^omo_dts_enum()/,/^}/p;/^ohmy_forbidden_for()/,/^}/p" "$1/bin/oc-profiles")"
+  eval "$(sed -n "/^mktemp_tracked()/,/^}/p;/^read_capped()/,/^}/p;/^omo_package_dir()/,/^}/p;/^omo_schema_file()/,/^}/p;/^omo_fields_json()/,/^}/p;/^omo_dts_enum()/,/^}/p;/^omo_category_names()/,/^}/p;/^ohmy_forbidden_for()/,/^}/p" "$1/bin/oc-profiles")"
   SELF_DIR="$1/bin"; MAX_PACKAGE_BYTES=67108864
   CACHE_HOME="${CACHE_HOME_OVERRIDE:-${XDG_CACHE_HOME:-$HOME/.cache}}"
   # read_capped stages through mktemp_tracked, which writes into the run cache.
@@ -97,6 +97,28 @@ PY
 )"
   is "the bundle regex still agrees with them" \
      "$(printf '%s' "$CATS" | jq -c 'sort')" "$(printf '%s' "${BUNDLE:-[]}" | jq -c 'sort')"
+fi
+
+echo "=== the roster follows what the bundle says a release renamed ==="
+# Synthetic bundles, so this holds on whichever release happens to be installed.
+mkbundle(){ mkdir -p "$1/dist"; printf '%s' "$2" > "$1/dist/index.js"; }
+cats(){ probe omo_category_names "$@" | jq -c . 2>/dev/null; }
+BASE='["artistry","deep","quick"]'
+V5="$ROOT/bundle5"; mkbundle "$V5" $'var LEGACY_CATEGORY_NAME_ALIASES = { deep: "deep-low" };\n\nvar CATEGORY_MODEL_REQUIREMENTS = {\n  "visual-engineering": {\n    fallbackChain: []\n  },\n  "deep-low": {\n    fallbackChain: []\n  },\n  "deep-high": {\n    fallbackChain: []\n  },\n  artistry: {\n    fallbackChain: []\n  }\n};\n'
+is "a renamed category takes its new name and its sibling is added" \
+   "$(cats "$V5" "$BASE")" '["artistry","deep-high","deep-low","quick","visual-engineering"]'
+V4="$ROOT/bundle4"; mkbundle "$V4" $'var CATEGORY_MODEL_REQUIREMENTS = {\n  quick: {\n    fallbackChain: []\n  },\n  deep: {\n    fallbackChain: []\n  },\n  artistry: {\n    fallbackChain: []\n  }\n};\n'
+is "a release that renamed nothing changes nothing" \
+   "$(cats "$V4" "$BASE")" '["artistry","deep","quick"]'
+VN="$ROOT/bundle-none"; mkbundle "$VN" 'var unrelated = 1;'
+is "a bundle that names neither leaves the roster alone" \
+   "$(cats "$VN" "$BASE")" "$(printf '%s' "$BASE" | jq -c .)"
+is "a package with no bundle leaves it alone too" \
+   "$(cats "$ROOT/no-such-package" "$BASE")" "$(printf '%s' "$BASE" | jq -c .)"
+if skip_omo "the installed bundle agrees with the roster"; then :; else
+  R="$(cd "$REPO" && ./bin/oc-profiles detect 2>/dev/null | jq -c '.roster.ohmy.categories' 2>/dev/null)"
+  P="$(cats "$OMO_PKG" "$(probe omo_dts_enum "$OMO_PKG/dist/config/schema/categories.d.ts" BuiltinCategoryNameSchema)")"
+  is "detect answers what the probe answers on the installed copy" "$R" "$P"
 fi
 
 echo "=== which fields an entry may carry is read, not remembered ==="

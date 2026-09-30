@@ -1,5 +1,32 @@
 # Changelog
 
+## Unreleased
+
+Support for oh-my-openagent 5.x.
+
+### Added
+
+- **An applied profile's efforts win over the TUI's memory.** opencode remembers the last effort
+  chosen per model and that overrides an agent's `variant`. Apply now clears those entries for every
+  model the profile names, records them in the backup, and revert restores them without overriding
+  newer choices. `OC_CLEAR_EFFORT_MEMORY=0` opts out.
+- `deep-high` category, and `test/effort.test.sh`.
+
+### Changed
+
+- **The category roster follows the release.** Renamed categories are read from
+  `LEGACY_CATEGORY_NAME_ALIASES` and the requirements table in the bundle, so 5.x's `deep-low` and
+  `deep-high` appear without a release of this plugin. The fallback roster is updated to match.
+- Claude templates target Opus 5.5 and Sonnet 5.5, `deep` becomes `deep-low`, and duplicate fallbacks
+  are dropped. The free templates move to models that still exist.
+- The write tests accept or refuse `models` according to what the installed package declares.
+
+### Docs
+
+- Troubleshooting: the `models` migration section is marked as 4.x only, and a new entry covers
+  Opus 5.5 compacting every few minutes
+  ([#6640](https://github.com/code-yeongyu/oh-my-openagent/issues/6640)).
+
 ## 1.4.1
 
 Three lists in this panel open on a click. One of them could also be closed by one.

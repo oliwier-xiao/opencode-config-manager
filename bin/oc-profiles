@@ -48,6 +48,7 @@ AUTH_FILE="${XDG_DATA_HOME:-$HOME/.local/share}/opencode/auth.json"
 OC_MANAGE_OHMY="${OC_MANAGE_OHMY:-1}"
 OC_MANAGE_OPENCODE="${OC_MANAGE_OPENCODE:-1}"
 OC_AUTO_RELOAD="${OC_AUTO_RELOAD:-1}"
+OC_CLEAR_EFFORT_MEMORY="${OC_CLEAR_EFFORT_MEMORY:-1}"
 OC_BACKUPS_KEEP="${OC_BACKUPS_KEEP:-10}"
 # Settings arrive from a JSON file a hand can edit. A count that is not a number, or
 # is zero, would either loop or delete the copy an undo needs.
@@ -493,6 +494,38 @@ PYEOF
   printf '%s' "$out"
 }
 
+# 5.x still declares the old `deep` in its declaration files, while the runtime has
+# split it into `deep-low` and `deep-high` and renames `deep` on load. The names a
+# config is actually read under are in the bundle: a legacy alias map, and the table
+# of categories that have a default chain. Both are folded into what the declarations
+# gave, so a release that declares nothing the bundle contradicts changes nothing.
+# omo_category_names <package dir> <roster json>; prints the roster, unchanged if the
+# bundle cannot be read or names nothing.
+omo_category_names() {
+  local pkg="$1" base="$2" f out
+  f="$(read_capped "$pkg/dist/index.js" "$MAX_PACKAGE_BYTES" "the oh-my-openagent bundle")" || { printf '%s' "$base"; return 0; }
+  out="$(python3 - "$f" "$base" <<'PYEOF'
+import json, re, sys
+base = json.loads(sys.argv[2])
+try:
+    blob = open(sys.argv[1], encoding="utf-8", errors="replace").read()
+except OSError:
+    print(json.dumps(base)); raise SystemExit
+alias = {}
+m = re.search(r"var LEGACY_CATEGORY_NAME_ALIASES = \{(.*?)\};", blob, re.S)
+if m:
+    alias = dict(re.findall(r'"?([\w-]+)"?\s*:\s*"([\w-]+)"', m.group(1)))
+t = re.search(r"\nvar CATEGORY_MODEL_REQUIREMENTS = \{\n(.*?)\n\};\n", blob, re.S)
+table = re.findall(r'^  "?([a-z][a-z-]*)"?: \{\s*$', t.group(1), re.M) if t else []
+if not alias and not table:
+    print(json.dumps(base)); raise SystemExit
+print(json.dumps(sorted({alias.get(n, n) for n in base} | set(table))))
+PYEOF
+)"
+  rm -f "$f"
+  case "$out" in ''|null) printf '%s' "$base" ;; *) printf '%s' "$out" ;; esac
+}
+
 # The rosters come off the installed software, never out of this file. opencode
 # names its agents in its own generated schema; oh-my-openagent ships a JSON Schema
 # naming its agents and carries the category names as an enum in its bundle. A
@@ -508,7 +541,7 @@ roster_json() {
   # carry the field sets is still valid JSON and still the right roster, so nothing
   # would ever re-probe for the half that was added — the entry would simply be
   # missing, for as long as neither version moved.
-  key="$(printf '%s|%s|v2' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
+  key="$(printf '%s|%s|v3' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
   cache_file="$CACHE/roster-$key.json"
   # Read like everything else: through the descriptor, bounded, and refused if it
   # is not a plain file this user owns. It sits next to the model cache, which
@@ -573,6 +606,7 @@ PYEOF
       [ -n "$bundle_f" ] && rm -f "$bundle_f"
     fi
     case "$om_cats" in ''|null) om_cats='[]' ;; esac
+    [ "$om_cats" = '[]' ] || om_cats="$(omo_category_names "$pkg" "$om_cats")"
   fi
 
   local out
@@ -955,6 +989,77 @@ clamp_manages() {
   printf '%s' "$1" | jq -c --argjson a "$2" 'map(select(. as $k | $a | index($k)))'
 }
 
+# ---------------------------------------------------------------- remembered efforts
+
+# opencode's TUI keeps the effort you last cycled to, per model, in its own state file,
+# and sends that with every prompt: a remembered value beats the `variant` a config
+# gives an agent, and only an absent one lets the config through. So a profile's
+# efforts lose to a `max` pressed weeks ago unless the entries for the models the
+# profile names are forgotten when it is applied.
+opencode_state_file() {
+  printf '%s' "${XDG_STATE_HOME:-$HOME/.local/state}/opencode/model.json"
+}
+
+# Every provider/model id a set of profile targets names, primaries and fallbacks alike.
+# profile_models_json <targets, one JSON object per line>
+profile_models_json() {
+  printf '%s\n' "$1" | jq -sc '
+    [ .[] | .payload // {} |
+      ( [ .. | objects | (.model?, .small_model?) | strings ]
+      + [ .. | objects | .fallback_models? | arrays | .[] | strings ]
+      + [ .. | objects | .models? | arrays | .[] | (strings, (objects | .model? | strings)) ] ) ]
+    | add // [] | unique' 2>/dev/null || printf '[]'
+}
+
+# Rewrites the state file in the shape it was found: opencode writes it compact.
+write_effort_state() {
+  local file="$1" doc="$2"
+  case "$doc" in
+    *$'\n'*) printf '%s\n' "$doc" | jq . | atomic_write "$file" ;;
+    *)       printf '%s\n' "$doc" | jq -c . | atomic_write "$file" ;;
+  esac
+}
+
+# Prints what it forgot as a JSON object {model: effort}, `{}` when there was nothing to
+# do. Never fatal: this is a courtesy on top of a switch that has already succeeded.
+# clear_remembered_efforts <models json array>
+clear_remembered_efforts() {
+  local models="$1" file src removed
+  [ "$OC_CLEAR_EFFORT_MEMORY" = 1 ] || { printf '{}'; return 0; }
+  [ "$models" != '[]' ] || { printf '{}'; return 0; }
+  file="$(opencode_state_file)"
+  [ -f "$file" ] || { printf '{}'; return 0; }
+  src="$("$SELF_DIR/safe-read" "$file" --max-bytes "$MAX_CONFIG_BYTES" \
+           --label "opencode's model state" 2>/dev/null)" || { printf '{}'; return 0; }
+  printf '%s' "$src" | jq -e 'type == "object" and ((.variant // {}) | type == "object")' \
+    >/dev/null 2>&1 || { printf '{}'; return 0; }
+  removed="$(printf '%s' "$src" | jq -c --argjson m "$models" \
+    '(.variant // {}) | with_entries(select(.key as $k | ($m | index($k)) != null))' 2>/dev/null)" \
+    || { printf '{}'; return 0; }
+  case "$removed" in ''|'{}') printf '{}'; return 0 ;; esac
+  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --argjson m "$models" \
+    'if has("variant") then .variant |= with_entries(select(.key as $k | ($m | index($k)) == null)) else . end')" \
+    2>/dev/null || { printf '{}'; return 0; }
+  printf '%s' "$removed"
+}
+
+# The undo of the above. A key the user has set again since is left as they set it.
+# restore_remembered_efforts <object of {model: effort}>
+restore_remembered_efforts() {
+  local cleared="$1" file src
+  [ "$OC_CLEAR_EFFORT_MEMORY" = 1 ] || return 0
+  case "$cleared" in ''|null|'{}') return 0 ;; esac
+  printf '%s' "$cleared" | jq -e 'type == "object"' >/dev/null 2>&1 || return 0
+  file="$(opencode_state_file)"
+  [ -f "$file" ] || return 0
+  src="$("$SELF_DIR/safe-read" "$file" --max-bytes "$MAX_CONFIG_BYTES" \
+           --label "opencode's model state" 2>/dev/null)" || return 0
+  printf '%s' "$src" | jq -e 'type == "object" and ((.variant // {}) | type == "object")' \
+    >/dev/null 2>&1 || return 0
+  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --argjson c "$cleared" \
+    '.variant = ($c + (.variant // {}))')" 2>/dev/null || true
+}
+
 # ---------------------------------------------------------------- apply
 
 cmd_apply() {
@@ -1055,6 +1160,19 @@ cmd_apply() {
   # must not put the previous ones back over them.
   OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
 
+  local applied_targets='' efforts_reset='{}'
+  while IFS= read -r target; do
+    [ -n "$target" ] || continue
+    logical=$(printf '%s' "$target" | jq -r '.file')
+    applicable "$logical" || continue
+    applied_targets+="$target"$'\n'
+  done <<< "$targets"
+  efforts_reset="$(clear_remembered_efforts "$(profile_models_json "$applied_targets")")"
+  if [ "$efforts_reset" != '{}' ]; then
+    jq --argjson c "$efforts_reset" '.clearedEfforts = $c' "$dir/meta.json" > "$dir/meta.json.tmp" \
+      && mv "$dir/meta.json.tmp" "$dir/meta.json"
+  fi
+
   # Stamp the store with fresh fingerprints read back off the files we just
   # wrote, so drift is measured against reality rather than against intent.
   local new_targets='[]' l fp
@@ -1086,7 +1204,8 @@ cmd_apply() {
   jq -cn --argjson applied "$(printf '%s\n' "${applied[@]:-}" | jq -R . | jq -sc 'map(select(length>0))')" \
          --argjson skipped "$(printf '%s\n' "${skipped[@]:-}" | jq -R . | jq -sc 'map(select(length>0))')" \
          --arg backup "$stamp" --arg id "$id" --argjson reloaded "$reloaded" \
-    '{ok:true, activeProfileId:$id, applied:$applied, skipped:$skipped, backup:$backup, reloaded:$reloaded}'
+         --argjson efforts "$(printf '%s' "$efforts_reset" | jq 'length')" \
+    '{ok:true, activeProfileId:$id, applied:$applied, skipped:$skipped, backup:$backup, reloaded:$reloaded, effortsReset:$efforts}'
 }
 
 # ---------------------------------------------------------------- revert
@@ -1207,6 +1326,7 @@ cmd_revert() {
 
   local back_to
   back_to=$(jq -r '.fromProfileId // ""' "$meta_f" 2>/dev/null)
+  restore_remembered_efforts "$(jq -c '.clearedEfforts // {}' "$meta_f" 2>/dev/null)"
   rm -f "$meta_f"
   # A backup taken before any profile was active records no `fromProfileId`, and
   # older backups predate the field entirely. The config just put back is still
@@ -2248,6 +2368,8 @@ oc-profiles — read and switch opencode model profiles
 
 Settings come from the environment:
   OC_MANAGE_OHMY=1  OC_MANAGE_OPENCODE=1  OC_AUTO_RELOAD=1  OC_BACKUPS_KEEP=10
+  OC_CLEAR_EFFORT_MEMORY=1  forget the efforts opencode's TUI remembered for the models
+                            a profile names, so the profile's own efforts apply
 USAGE
 }
 

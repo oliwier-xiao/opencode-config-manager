@@ -124,7 +124,7 @@ costs per million tokens:
 ![Editing a profile, plain opencode](docs/plain-editor.png)
 
 Effort works on agent rows in both shapes — opencode's own agent entries carry a `variant` just as
-oh-my-openagent's do. oh-my-openagent 4.19 renamed its own to `reasoning`; both spellings are read,
+oh-my-openagent's do. oh-my-openagent 4.19 renamed its own to `reasoning` (5.x went back to `variant`); both spellings are read,
 and an entry is written back in the one it already uses, so a config that version migrated for
 itself keeps its effort either way. The two rows it is disabled on are **Default model** and
 **Small model**: those are bare model strings with nowhere to put one. The control stays visible
@@ -194,6 +194,17 @@ opencode half, because its agents supersede opencode's. Each row says what it wi
 here:
 
 ![Templates on plain opencode](docs/plain-templates.png)
+
+### oh-my-openagent 5.x
+
+Supported alongside 4.x. The category roster is read from what the installed release declares, so
+the `deep` category that 5.x split into `deep-low` and `deep-high` shows up under those names, and
+the Claude templates target Opus 5.5 and Sonnet 5.5.
+
+Opencode's TUI remembers the effort you last picked for a model (`~/.local/state/opencode/model.json`)
+and that memory outranks an agent's `variant`, so an applied profile's efforts can appear to be
+ignored. Applying a profile now clears the remembered effort for every model the profile names, and
+reverting restores it. Set `OC_CLEAR_EFFORT_MEMORY=0` to leave that file alone.
 
 Adding one saves it as a profile — nothing on disk changes until you switch to it, so you can read
 it and edit it first. A template needing a provider you have not connected is still listed, with

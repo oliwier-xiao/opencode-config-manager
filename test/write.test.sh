@@ -110,11 +110,19 @@ is "and it reaches the file"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.json
 OC_PROFILE_JSON='{"id":"mods","name":"Mods","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{"oracle":{"models":[{"model":"anthropic/claude-opus-5"}]}},"categories":{}}}]}' \
   run "$D" save >/dev/null
 M=$(run "$D" apply mods)
-is "models is refused"           "$(jq -r .code <<<"$M")" "E_FIELD_4X"
-# The message is half the fix: a refusal that names the wrong shape is the reason
-# the check was split in the first place.
-is "and names the shape"         "$(jq -r '.message|test("on an agent")' <<<"$M")" "true"
-is "the file was left alone"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.reasoning')" "high"
+# Whether `models` is legal on an agent is decided by the installed package, not by
+# this test: 4.x declares no such field, 5.x does. The gate reads the same answer, so
+# the expectation follows it rather than assuming which release happens to be cached.
+if run "$D" detect | jq -e '.roster.ohmy.fields.agent | index("models") != null' >/dev/null 2>&1; then
+  is "models is accepted where the package declares it" "$(jq -r .ok <<<"$M")" "true"
+  is "and reaches the file"        "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.models|length')" "1"
+else
+  is "models is refused"           "$(jq -r .code <<<"$M")" "E_FIELD_4X"
+  # The message is half the fix: a refusal that names the wrong shape is the reason
+  # the check was split in the first place.
+  is "and names the shape"         "$(jq -r '.message|test("on an agent")' <<<"$M")" "true"
+  is "the file was left alone"     "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.agents.oracle.reasoning')" "high"
+fi
 
 # A category is not an agent. oh-my-openagent's CategoryConfigSchema declares `models`;
 # AgentOverrideConfigSchema does not. Refusing it on both turned a legal key into an

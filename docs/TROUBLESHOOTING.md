@@ -142,7 +142,9 @@ switch — the same guarantee described in [Switching, safely](../README.md#swit
 ## Your oh-my-openagent agents run a model you did not choose
 
 Nothing to do with this plugin — this one is oh-my-openagent's, and it bites after an upgrade to
-4.x whether or not you use the panel.
+4.x whether or not you use the panel. **Everything below is about 4.x.** On 5.x the agents are
+read in the shape the panel writes (`model`, `variant`, `fallback_models`), so there is nothing to
+repair, and `oh-my-openagent config migrate` is no longer the hazard it is described as here.
 
 Its `2026-08-reasoning-unification` migration rewrites every agent to a plural `models` array and
 deletes the `model`, `reasoning` and `fallback_models` keys. But the schema oh-my-openagent itself
@@ -163,7 +165,7 @@ rest become `fallback_models`:
 
 ```jsonc
 "sisyphus": {
-  "model": "anthropic/claude-opus-5",
+  "model": "anthropic/claude-opus-5-5",
   "reasoning": "max",
   "fallback_models": [{ "model": "google/gemini-3.1-pro-preview", "reasoning": "high" }]
 }
@@ -216,3 +218,25 @@ jq '.plugin' ~/.opencode/opencode.json        # usually the culprit
 there separately, the duplicate check does not read that file, and removing its entry costs you
 the `Roles · Models` sidebar and the TUI-only commands — `doctor` reports it as
 `TUI plugin entry missing from tui.json`. Leave it alone.
+
+---
+
+## A session that compacts every few minutes on Opus 5.5
+
+Also oh-my-openagent's. Its preemptive-compaction hook compacts at 78% of what it believes the
+context limit is, and it only knows 1M for an allowlist of model ids. `claude-opus-5-5` is not on
+it, so the hook assumes 200K, fires near 156K tokens while opencode shows a few percent of a 1M
+window, and then fails with `Compaction summarize timed out after 60000ms`.
+
+Tracked upstream as
+[#6640](https://github.com/code-yeongyu/oh-my-openagent/issues/6640). Until it ships, turn the hook
+off in `~/.omo/omo.jsonc`; opencode's own compaction keeps working, against the real limit:
+
+```jsonc
+"experimental": { "preemptive_compaction": false }
+```
+
+Setting `ANTHROPIC_1M_CONTEXT=true` instead would also work, but it claims 1M for every Anthropic
+model, Haiku included, and Haiku has 200K.
+
+Restart opencode afterwards: the running process keeps the value it started with.
