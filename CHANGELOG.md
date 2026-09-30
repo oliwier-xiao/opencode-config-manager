@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 1.5.0
 
 Support for oh-my-openagent 5.x.
 
