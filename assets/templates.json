@@ -34,10 +34,6 @@
             "fallback_models": [
               {
                 "model": "opencode/nemotron-3-ultra-free"
-              },
-              {
-                "model": "opencode/muse-spark-1.2-contributor-free",
-                "variant": "high"
               }
             ]
           },
@@ -58,10 +54,6 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "opencode/muse-spark-1.2-contributor-free",
-                "variant": "high"
-              },
-              {
                 "model": "opencode/nemotron-3-ultra-free"
               }
             ]
@@ -70,7 +62,7 @@
             "model": "opencode/nemotron-3-ultra-free",
             "fallback_models": [
               {
-                "model": "opencode/muse-spark-1.2-contributor-free",
+                "model": "opencode/muse-spark-1.3-contributor-free",
                 "variant": "medium"
               },
               {
@@ -83,22 +75,14 @@
             "variant": "xhigh",
             "fallback_models": [
               {
-                "model": "opencode/muse-spark-1.2-contributor-free",
-                "variant": "xhigh"
-              },
-              {
                 "model": "opencode/nemotron-3-ultra-free"
               }
             ]
           },
           "metis": {
-            "model": "opencode/muse-spark-1.2-contributor-free",
+            "model": "opencode/muse-spark-1.3-contributor-free",
             "variant": "high",
             "fallback_models": [
-              {
-                "model": "opencode/muse-spark-1.3-contributor-free",
-                "variant": "high"
-              },
               {
                 "model": "opencode/nemotron-3-ultra-free"
               }
@@ -109,7 +93,7 @@
             "variant": "xhigh",
             "fallback_models": [
               {
-                "model": "opencode/muse-spark-1.2-contributor-free",
+                "model": "opencode/muse-spark-1.3-contributor-free",
                 "variant": "high"
               },
               {
@@ -124,7 +108,7 @@
                 "model": "opencode/nemotron-3.5-lightning-free"
               },
               {
-                "model": "opencode/mimo-v2.5-free"
+                "model": "opencode/mimo-v2.6-flash-free"
               }
             ]
           },
@@ -140,7 +124,7 @@
             ]
           },
           "multimodal-looker": {
-            "model": "opencode/mimo-v2.5-free",
+            "model": "opencode/mimo-v2.6-flash-free",
             "fallback_models": [
               {
                 "model": "opencode/big-pickle"
@@ -154,7 +138,7 @@
             "model": "opencode/nemotron-3-ultra-free",
             "fallback_models": [
               {
-                "model": "opencode/muse-spark-1.2-contributor-free",
+                "model": "opencode/muse-spark-1.3-contributor-free",
                 "variant": "medium"
               },
               {
@@ -165,7 +149,7 @@
         },
         "categories": {
           "visual-engineering": {
-            "model": "opencode/mimo-v2.5-free",
+            "model": "opencode/mimo-v2.6-flash-free",
             "fallback_models": [
               {
                 "model": "opencode/big-pickle"
@@ -174,25 +158,13 @@
           },
           "artistry": {
             "model": "opencode/muse-spark-1.3-contributor-free",
-            "variant": "high",
-            "fallback_models": [
-              {
-                "model": "opencode/muse-spark-1.2-contributor-free",
-                "variant": "high"
-              }
-            ]
+            "variant": "high"
           },
           "ultrabrain": {
             "model": "opencode/muse-spark-1.3-contributor-free",
-            "variant": "xhigh",
-            "fallback_models": [
-              {
-                "model": "opencode/muse-spark-1.2-contributor-free",
-                "variant": "xhigh"
-              }
-            ]
+            "variant": "xhigh"
           },
-          "deep": {
+          "deep-low": {
             "model": "opencode/muse-spark-1.3-contributor-free",
             "variant": "high",
             "fallback_models": [
@@ -200,6 +172,10 @@
                 "model": "opencode/nemotron-3-ultra-free"
               }
             ]
+          },
+          "deep-high": {
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "xhigh"
           },
           "quick": {
             "model": "opencode/nemotron-3.5-lightning-free",
@@ -210,14 +186,8 @@
             ]
           },
           "writing": {
-            "model": "opencode/muse-spark-1.2-contributor-free",
-            "variant": "medium",
-            "fallback_models": [
-              {
-                "model": "opencode/muse-spark-1.3-contributor-free",
-                "variant": "medium"
-              }
-            ]
+            "model": "opencode/muse-spark-1.3-contributor-free",
+            "variant": "medium"
           },
           "unspecified-low": {
             "model": "opencode/ling-3.0-flash-fin-free",
@@ -242,7 +212,7 @@
             "model": "opencode/nemotron-3-ultra-free"
           },
           {
-            "model": "opencode/muse-spark-1.2-contributor-free"
+            "model": "opencode/muse-spark-1.3-contributor-free"
           }
         ]
       }
@@ -252,7 +222,7 @@
       "name": "Free (OpenRouter)",
       "shortName": "FO",
       "vendor": "openrouter",
-      "description": "The same on OpenRouter's free tier. Inkling thinks and is the one free model here with every effort, Laguna builds, Ling reads.",
+      "description": "The same on OpenRouter's free tier. Inkling thinks and is the one free model here with every effort, Qwen is the second thinker, Laguna builds, Gemma reads.",
       "requires": [
         "openrouter"
       ],
@@ -282,8 +252,8 @@
                 "model": "openrouter/poolside/laguna-s-2.1:free"
               },
               {
-                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-                "variant": "high"
+                "model": "openrouter/qwen/qwen3.8-27b:free",
+                "variant": "xhigh"
               }
             ]
           },
@@ -295,7 +265,7 @@
                 "variant": "medium"
               },
               {
-                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
+                "model": "openrouter/google/gemma-4-26b-a4b-it:free"
               }
             ]
           },
@@ -304,8 +274,8 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-                "variant": "high"
+                "model": "openrouter/qwen/qwen3.8-27b:free",
+                "variant": "xhigh"
               },
               {
                 "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
@@ -334,8 +304,8 @@
                 "variant": "max"
               },
               {
-                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-                "variant": "high"
+                "model": "openrouter/qwen/qwen3.8-27b:free",
+                "variant": "xhigh"
               }
             ]
           },
@@ -354,8 +324,8 @@
             ]
           },
           "momus": {
-            "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-            "variant": "high",
+            "model": "openrouter/qwen/qwen3.8-27b:free",
+            "variant": "xhigh",
             "fallback_models": [
               {
                 "model": "openrouter/thinkingmachines/inkling:free",
@@ -368,7 +338,7 @@
             ]
           },
           "librarian": {
-            "model": "openrouter/inclusionai/ling-3.0-flash-fin:free",
+            "model": "openrouter/google/gemma-4-26b-a4b-it:free",
             "fallback_models": [
               {
                 "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
@@ -383,7 +353,7 @@
             "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
             "fallback_models": [
               {
-                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
+                "model": "openrouter/google/gemma-4-26b-a4b-it:free"
               },
               {
                 "model": "openrouter/thinkingmachines/inkling-small:free",
@@ -410,7 +380,7 @@
                 "variant": "low"
               },
               {
-                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
+                "model": "openrouter/google/gemma-4-26b-a4b-it:free"
               }
             ]
           }
@@ -439,12 +409,12 @@
             "variant": "max",
             "fallback_models": [
               {
-                "model": "openrouter/nex-agi/nex-n2.5-pro:free",
-                "variant": "high"
+                "model": "openrouter/qwen/qwen3.8-27b:free",
+                "variant": "xhigh"
               }
             ]
           },
-          "deep": {
+          "deep-low": {
             "model": "openrouter/nvidia/nemotron-3-ultra-550b-a55b:free",
             "variant": "high",
             "fallback_models": [
@@ -454,11 +424,21 @@
               }
             ]
           },
+          "deep-high": {
+            "model": "openrouter/thinkingmachines/inkling:free",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "openrouter/qwen/qwen3.8-27b:free",
+                "variant": "xhigh"
+              }
+            ]
+          },
           "quick": {
             "model": "openrouter/nvidia/nemotron-3.5-lightning:free",
             "fallback_models": [
               {
-                "model": "openrouter/inclusionai/ling-3.0-flash-fin:free"
+                "model": "openrouter/google/gemma-4-26b-a4b-it:free"
               }
             ]
           },
@@ -473,7 +453,7 @@
             ]
           },
           "unspecified-low": {
-            "model": "openrouter/inclusionai/ling-3.0-flash-fin:free",
+            "model": "openrouter/google/gemma-4-26b-a4b-it:free",
             "fallback_models": [
               {
                 "model": "openrouter/nvidia/nemotron-3.5-lightning:free"
@@ -698,13 +678,23 @@
               }
             ]
           },
-          "deep": {
+          "deep-low": {
             "model": "openrouter/z-ai/glm-5.3-flash",
             "variant": "high",
             "fallback_models": [
               {
                 "model": "openrouter/openai/gpt-oss-120b",
                 "variant": "high"
+              }
+            ]
+          },
+          "deep-high": {
+            "model": "openrouter/z-ai/glm-5.3-flash",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "openrouter/deepseek/deepseek-v4-flash-0731",
+                "variant": "max"
               }
             ]
           },
@@ -919,13 +909,22 @@
               }
             ]
           },
-          "deep": {
+          "deep-low": {
             "model": "google/gemini-3.1-pro-preview",
             "variant": "medium",
             "fallback_models": [
               {
                 "model": "google/gemini-3.7-flash",
                 "variant": "high"
+              }
+            ]
+          },
+          "deep-high": {
+            "model": "google/gemini-3.1-pro-preview",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "google/gemini-2.5-pro"
               }
             ]
           },
@@ -1148,13 +1147,23 @@
               }
             ]
           },
-          "deep": {
+          "deep-low": {
             "model": "openai/gpt-5.6-sol",
             "variant": "medium",
             "fallback_models": [
               {
                 "model": "openai/gpt-5.6-terra",
                 "variant": "high"
+              }
+            ]
+          },
+          "deep-high": {
+            "model": "openai/gpt-5.6-sol",
+            "variant": "max",
+            "fallback_models": [
+              {
+                "model": "openai/gpt-5.6",
+                "variant": "xhigh"
               }
             ]
           },
@@ -1214,7 +1223,7 @@
       "name": "Claude API",
       "shortName": "CL",
       "vendor": "anthropic",
-      "description": "Every agent on Anthropic. Opus 5 does the thinking, Sonnet 5 does the building, Haiku 4.5 does the reading, Fable 5 does the prose.",
+      "description": "Every agent on Anthropic. Opus 5.5 does the thinking, Sonnet 5.5 does the building, Haiku 4.5 does the reading, Fable 5 does the prose.",
       "requires": [
         "anthropic"
       ],
@@ -1223,96 +1232,69 @@
         "ohmy"
       ],
       "opencode": {
-        "model": "anthropic/claude-opus-5",
+        "model": "anthropic/claude-opus-5-5",
         "small_model": "anthropic/claude-haiku-4-5",
         "agent": {
           "plan": {
-            "model": "anthropic/claude-opus-5"
+            "model": "anthropic/claude-opus-5-5"
           },
           "build": {
-            "model": "anthropic/claude-sonnet-5"
+            "model": "anthropic/claude-sonnet-5-5"
           }
         }
       },
       "ohmy": {
         "agents": {
           "sisyphus": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "max",
             "fallback_models": [
               {
-                "model": "anthropic/claude-opus-4-8",
-                "variant": "max"
-              },
-              {
-                "model": "anthropic/claude-sonnet-5",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "max"
               }
             ]
           },
           "hephaestus": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "anthropic/claude-sonnet-5",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "max"
               }
             ]
           },
           "prometheus": {
-            "model": "anthropic/claude-opus-5",
-            "variant": "max",
-            "fallback_models": [
-              {
-                "model": "anthropic/claude-opus-4-8",
-                "variant": "max"
-              }
-            ]
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "max"
           },
           "atlas": {
-            "model": "anthropic/claude-sonnet-5",
-            "fallback_models": [
-              {
-                "model": "anthropic/claude-sonnet-4-6"
-              }
-            ]
+            "model": "anthropic/claude-sonnet-5-5"
           },
           "oracle": {
-            "model": "anthropic/claude-opus-5",
-            "variant": "xhigh",
-            "fallback_models": [
-              {
-                "model": "anthropic/claude-opus-4-8",
-                "variant": "xhigh"
-              }
-            ]
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "xhigh"
           },
           "metis": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "anthropic/claude-sonnet-5",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "max"
               }
             ]
           },
           "momus": {
-            "model": "anthropic/claude-opus-5",
-            "variant": "max",
-            "fallback_models": [
-              {
-                "model": "anthropic/claude-opus-4-8",
-                "variant": "max"
-              }
-            ]
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "max"
           },
           "librarian": {
             "model": "anthropic/claude-haiku-4-5",
             "fallback_models": [
               {
-                "model": "anthropic/claude-sonnet-4-6",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "low"
               }
             ]
@@ -1321,13 +1303,13 @@
             "model": "anthropic/claude-haiku-4-5",
             "fallback_models": [
               {
-                "model": "anthropic/claude-sonnet-4-6",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "low"
               }
             ]
           },
           "multimodal-looker": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "anthropic/claude-haiku-4-5"
@@ -1335,21 +1317,16 @@
             ]
           },
           "sisyphus-junior": {
-            "model": "anthropic/claude-sonnet-5",
-            "fallback_models": [
-              {
-                "model": "anthropic/claude-sonnet-4-6"
-              }
-            ]
+            "model": "anthropic/claude-sonnet-5-5"
           }
         },
         "categories": {
           "visual-engineering": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "anthropic/claude-opus-5",
+                "model": "anthropic/claude-opus-5-5",
                 "variant": "max"
               }
             ]
@@ -1359,42 +1336,40 @@
             "variant": "high",
             "fallback_models": [
               {
-                "model": "anthropic/claude-opus-5",
+                "model": "anthropic/claude-opus-5-5",
                 "variant": "max"
               }
             ]
           },
           "ultrabrain": {
-            "model": "anthropic/claude-opus-5",
-            "variant": "max",
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "max"
+          },
+          "deep-low": {
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "high",
             "fallback_models": [
               {
-                "model": "anthropic/claude-opus-4-8",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "max"
               }
             ]
           },
-          "deep": {
-            "model": "anthropic/claude-opus-5",
-            "variant": "high",
-            "fallback_models": [
-              {
-                "model": "anthropic/claude-sonnet-5",
-                "variant": "max"
-              }
-            ]
+          "deep-high": {
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "max"
           },
           "quick": {
             "model": "anthropic/claude-haiku-4-5",
             "fallback_models": [
               {
-                "model": "anthropic/claude-sonnet-4-6",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "low"
               }
             ]
           },
           "writing": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "anthropic/claude-fable-5",
@@ -1403,7 +1378,7 @@
             ]
           },
           "unspecified-low": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "anthropic/claude-haiku-4-5"
@@ -1411,11 +1386,11 @@
             ]
           },
           "unspecified-high": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "max",
             "fallback_models": [
               {
-                "model": "anthropic/claude-sonnet-5",
+                "model": "anthropic/claude-sonnet-5-5",
                 "variant": "max"
               }
             ]
@@ -1423,7 +1398,7 @@
         },
         "fallback_models": [
           {
-            "model": "anthropic/claude-sonnet-5"
+            "model": "anthropic/claude-sonnet-5-5"
           },
           {
             "model": "anthropic/claude-haiku-4-5"
@@ -1519,7 +1494,7 @@
       "name": "Daily work",
       "shortName": "DW",
       "vendor": "mixed",
-      "description": "Opus 5 as the brain with Gemini underneath every agent, so a rate limit at Anthropic slows you down instead of stopping you.",
+      "description": "Opus 5.5 as the brain with Gemini underneath every agent, so a rate limit at Anthropic slows you down instead of stopping you.",
       "requires": [
         "anthropic",
         "google"
@@ -1529,21 +1504,21 @@
         "ohmy"
       ],
       "opencode": {
-        "model": "anthropic/claude-opus-5",
+        "model": "anthropic/claude-opus-5-5",
         "small_model": "anthropic/claude-haiku-4-5",
         "agent": {
           "plan": {
-            "model": "anthropic/claude-opus-5"
+            "model": "anthropic/claude-opus-5-5"
           },
           "build": {
-            "model": "anthropic/claude-sonnet-5"
+            "model": "anthropic/claude-sonnet-5-5"
           }
         }
       },
       "ohmy": {
         "agents": {
           "sisyphus": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "max",
             "fallback_models": [
               {
@@ -1553,7 +1528,7 @@
             ]
           },
           "hephaestus": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "high",
             "fallback_models": [
               {
@@ -1563,7 +1538,7 @@
             ]
           },
           "prometheus": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "max",
             "fallback_models": [
               {
@@ -1573,7 +1548,7 @@
             ]
           },
           "atlas": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "google/gemini-3.1-pro-preview",
@@ -1582,7 +1557,7 @@
             ]
           },
           "oracle": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "xhigh",
             "fallback_models": [
               {
@@ -1592,11 +1567,11 @@
             ]
           },
           "metis": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "variant": "max",
             "fallback_models": [
               {
-                "model": "anthropic/claude-opus-5",
+                "model": "anthropic/claude-opus-5-5",
                 "variant": "max"
               },
               {
@@ -1606,7 +1581,7 @@
             ]
           },
           "momus": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "max",
             "fallback_models": [
               {
@@ -1634,7 +1609,7 @@
             ]
           },
           "multimodal-looker": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "google/gemini-3.7-flash",
@@ -1643,7 +1618,7 @@
             ]
           },
           "sisyphus-junior": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "google/gemini-3.7-flash",
@@ -1654,7 +1629,7 @@
         },
         "categories": {
           "visual-engineering": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "variant": "max",
             "fallback_models": [
               {
@@ -1662,17 +1637,17 @@
                 "variant": "high"
               },
               {
-                "model": "anthropic/claude-opus-5",
+                "model": "anthropic/claude-opus-5-5",
                 "variant": "max"
               }
             ]
           },
           "ultrabrain": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "high",
             "fallback_models": [
               {
-                "model": "anthropic/claude-opus-5",
+                "model": "anthropic/claude-opus-5-5",
                 "variant": "max"
               },
               {
@@ -1681,8 +1656,8 @@
               }
             ]
           },
-          "deep": {
-            "model": "anthropic/claude-opus-5",
+          "deep-low": {
+            "model": "anthropic/claude-opus-5-5",
             "variant": "high",
             "fallback_models": [
               {
@@ -1691,8 +1666,22 @@
               }
             ]
           },
+          "deep-high": {
+            "model": "anthropic/claude-opus-5-5",
+            "variant": "high",
+            "fallback_models": [
+              {
+                "model": "anthropic/claude-opus-5-5",
+                "variant": "max"
+              },
+              {
+                "model": "google/gemini-3.1-pro-preview",
+                "variant": "high"
+              }
+            ]
+          },
           "artistry": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "variant": "high",
             "fallback_models": [
               {
@@ -1711,7 +1700,7 @@
             ]
           },
           "unspecified-low": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "google/gemini-3-flash-preview",
@@ -1720,7 +1709,7 @@
             ]
           },
           "unspecified-high": {
-            "model": "anthropic/claude-opus-5",
+            "model": "anthropic/claude-opus-5-5",
             "variant": "max",
             "fallback_models": [
               {
@@ -1730,7 +1719,7 @@
             ]
           },
           "writing": {
-            "model": "anthropic/claude-sonnet-5",
+            "model": "anthropic/claude-sonnet-5-5",
             "fallback_models": [
               {
                 "model": "google/gemini-3-flash-preview",
