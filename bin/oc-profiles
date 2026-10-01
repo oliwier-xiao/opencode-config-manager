@@ -14,7 +14,17 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
-VERSION="1.5.0"
+# Everything this creates is this user's alone. The copies a backup keeps carry the
+# config's provider keys and MCP tokens, and the folder that kept the config private
+# does not come with them — so nothing here relies on the umask it was started
+# under. The folders and copies are made private explicitly below as well; this is
+# the floor under anything that is not. opencode is somebody else's program and is
+# run with the umask it would have had, so its own files come out as they always do.
+OC_INHERITED_UMASK="$(umask)"
+umask 077
+as_caller() { ( umask "$OC_INHERITED_UMASK"; exec "$@" ); }
+
+VERSION="1.5.1"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -34,9 +44,12 @@ JSONC="$SELF_DIR/jsonc-edit"
 
 # A profile only makes sense for the config it was captured from, so a non-default
 # CFG_DIR gets its own store; the default folder keeps the plain path it always had.
-STATE="$STATE_HOME/omarchy/opencode-configs"
+# STATE_ROOT is the one folder every store and backup sits below, and the boundary
+# that keeps them private.
+STATE_ROOT="$STATE_HOME/omarchy/opencode-configs"
+STATE="$STATE_ROOT"
 if [ "$CFG_DIR" != "$DEFAULT_CFG_DIR" ]; then
-  STATE="$STATE/by-config/$(printf '%s' "$CFG_DIR" | sha256sum | cut -c1-12)"
+  STATE="$STATE_ROOT/by-config/$(printf '%s' "$CFG_DIR" | sha256sum | cut -c1-12)"
 fi
 
 PROFILES="$STATE/profiles.json"
@@ -132,9 +145,10 @@ on_signal() { rollback_writes; cleanup_temps; exit 143; }
 trap cleanup_temps EXIT
 trap on_signal INT TERM HUP
 
-# Under $CACHE where possible rather than a shared /tmp, and 0600 either way.
+# Under $CACHE rather than a shared /tmp, and 0600. ensure_state has already shown
+# $CACHE to be a private folder this user owns; without it there is no folder here,
+# mktemp fails, and the caller reads that as nothing to read.
 mktemp_tracked() {
-  mkdir -p -m 700 "$CACHE" 2>/dev/null || true
   OC_TEMP_PREFIX="$CACHE/.stage.$OC_RUN_TAG."
   mktemp "${OC_TEMP_PREFIX}XXXXXXXX" 2>/dev/null
 }
@@ -168,6 +182,38 @@ new_backup_stamp() {
     suffix=$((suffix + 1))
   done
   printf '%s' "$candidate"
+}
+
+# A new folder for one backup, below the $BACKUPS ensure_state vouched for. mkdir
+# without -p fails on anything already at the name, a planted link included, and
+# -m makes it 0700 whatever umask the caller had.
+make_backup_dir() {
+  mkdir -m 700 "$1" 2>/dev/null
+}
+
+# Anything a backup folder holds besides the copies: a new file, 0600, never written
+# through a link.
+write_private() {
+  "$SELF_DIR/safe-write" "$1" --mode 0600
+}
+
+# The copy a backup keeps of a config. It holds whatever the config holds, provider
+# keys and MCP tokens included, and what kept those private was often the config's
+# folder rather than its own mode — so the mode is not carried across the way
+# `cp -p` carried it: every copy is a new 0600 file in a 0700 folder. Read through
+# the descriptor like every other read here (--follow: the user's own file, which a
+# dotfiles repository may link), and capped at what a restore will read back, so a
+# copy that could never be restored is refused before anything is written. An empty
+# config is copied as an empty file; a read that failed leaves no copy at all.
+backup_copy() {
+  local src="$1" dest="$2"
+  "$SELF_DIR/safe-read" "$src" --follow --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "$(basename "$src")" 2>/dev/null \
+    | "$SELF_DIR/safe-write" "$dest" --mode 0600 --allow-empty 2>/dev/null
+  local rc=("${PIPESTATUS[@]}")
+  [ "${rc[0]}" = 0 ] && [ "${rc[1]}" = 0 ] && return 0
+  rm -f "$dest"
+  return 1
 }
 
 # A projection of only the managed keys, key-sorted so the digest does not move
@@ -322,8 +368,19 @@ create_store() {
   rm -f "$tmp"
 }
 
+# Every folder this keeps anything in is shown to be private before anything goes
+# in it: created 0700, opened without following a link, owned by this user, with
+# any group or other bit cleared on that descriptor (bin/private-dir). Both roots
+# are walked as well, which is the repair for what 1.5.0 and earlier left behind
+# under a 022 umask — 0755 folders holding 0644 copies of configs. A root that is a
+# symlink or belongs to someone else is refused rather than written into: the
+# copies that would land there could not then be shown to be private.
 ensure_state() {
-  mkdir -p "$STATE" "$BACKUPS" "$CACHE" 2>/dev/null || true
+  local dirs=(--tree "$STATE_ROOT") err
+  [ "$STATE" = "$STATE_ROOT" ] || dirs+=("$STATE_ROOT/by-config" "$STATE")
+  dirs+=("$BACKUPS" --tree "$CACHE")
+  err="$("$SELF_DIR/private-dir" "${dirs[@]}" 2>&1 >/dev/null)" \
+    || refuse "E_STORE" "The plugin's own folder is not private: ${err:-it could not be checked}."
   local raw rc=0
   raw="$(read_store)" || rc=$?
   case "$rc" in
@@ -557,7 +614,7 @@ roster_json() {
   # hung opencode costs a roster, not the panel.
   local probed_oc=0
   oc_agents="$(command -v opencode >/dev/null 2>&1 \
-    && timeout 10 opencode generate 2>/dev/null | head -c "$MAX_PACKAGE_BYTES" \
+    && as_caller timeout 10 opencode generate 2>/dev/null | head -c "$MAX_PACKAGE_BYTES" \
        | jq -c '[.components.schemas.Config.properties.agent.properties | keys[]]' 2>/dev/null)"
   case "$oc_agents" in
     ''|null) oc_agents='[]' ;;
@@ -626,11 +683,9 @@ PYEOF
   # transient failure could be weeks. --no-follow: this is the plugin's own file at
   # a predictable path, and a link planted there would redirect the write.
   if [ "$probed_oc" = 1 ] && [ -n "$pkg" ] && [ "$om_agents" != '[]' ]; then
-    mkdir -p "$CACHE" 2>/dev/null \
-      && printf '%s\n' "$out" | atomic_write "$cache_file" --no-follow 2>/dev/null || true
+    printf '%s\n' "$out" | atomic_write "$cache_file" --no-follow 2>/dev/null || true
   elif [ "$probed_oc" = 1 ] && [ -z "$pkg" ]; then
-    mkdir -p "$CACHE" 2>/dev/null \
-      && printf '%s\n' "$out" | atomic_write "$cache_file" --no-follow 2>/dev/null || true
+    printf '%s\n' "$out" | atomic_write "$cache_file" --no-follow 2>/dev/null || true
   fi
   printf '%s' "$out"
 }
@@ -713,7 +768,7 @@ cmd_detect() {
   opencode="$(resolve_opencode)"
 
   local oc_version omo_version omo_pkg
-  oc_version="$(command -v opencode >/dev/null 2>&1 && opencode --version 2>/dev/null | tr -d '\r' || true)"
+  oc_version="$(command -v opencode >/dev/null 2>&1 && as_caller opencode --version 2>/dev/null | tr -d '\r' || true)"
   omo_pkg="$(omo_package_dir)"
   omo_version="$([ -n "$omo_pkg" ] && jq -r '.version // ""' "$omo_pkg/package.json" 2>/dev/null || true)"
 
@@ -1012,11 +1067,13 @@ profile_models_json() {
 }
 
 # Rewrites the state file in the shape it was found: opencode writes it compact.
+# --no-follow, like the read before it: the file is opencode's, at a path anything
+# running as this user can predict, and the read has already refused a link there.
 write_effort_state() {
   local file="$1" doc="$2"
   case "$doc" in
-    *$'\n'*) printf '%s\n' "$doc" | jq . | atomic_write "$file" ;;
-    *)       printf '%s\n' "$doc" | jq -c . | atomic_write "$file" ;;
+    *$'\n'*) printf '%s\n' "$doc" | jq . | atomic_write "$file" --no-follow ;;
+    *)       printf '%s\n' "$doc" | jq -c . | atomic_write "$file" --no-follow ;;
   esac
 }
 
@@ -1090,7 +1147,7 @@ cmd_apply() {
 
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
-  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  make_backup_dir "$dir" || refuse "E_PERM" "Cannot create a backup directory."
 
   local from_id backup_files='[]'
   from_id=$(store_jq -r '.state.activeProfileId // ""')
@@ -1102,7 +1159,7 @@ cmd_apply() {
     logical=$(printf '%s' "$target" | jq -r '.file')
     applicable "$logical" || continue
     file="$(file_for "$logical")"
-    cp -pL "$file" "$dir/$logical.json" || refuse "E_PERM" "Cannot back up $(basename "$file")."
+    backup_copy "$file" "$dir/$logical.json" || refuse "E_PERM" "Cannot back up $(basename "$file")."
     backup_files=$(jq -cn --argjson acc "$backup_files" --arg l "$logical" --arg p "$file" \
       --arg fp "$(fingerprint_logical "$logical")" \
       '$acc + [{logical:$l, path:$p, fingerprint:$fp}]')
@@ -1110,7 +1167,8 @@ cmd_apply() {
 
   jq -n --arg ts "$stamp" --arg from "$from_id" --arg to "$id" --argjson files "$backup_files" \
     '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:$to, files:$files}' \
-    > "$dir/meta.json"
+    | write_private "$dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
 
   # Write. Any failure rolls every already-written file back from the copies
   # above, so a switch is all of itself or none of it.
@@ -1169,8 +1227,9 @@ cmd_apply() {
   done <<< "$targets"
   efforts_reset="$(clear_remembered_efforts "$(profile_models_json "$applied_targets")")"
   if [ "$efforts_reset" != '{}' ]; then
-    jq --argjson c "$efforts_reset" '.clearedEfforts = $c' "$dir/meta.json" > "$dir/meta.json.tmp" \
-      && mv "$dir/meta.json.tmp" "$dir/meta.json"
+    "$SELF_DIR/safe-read" "$dir/meta.json" --max-bytes "$MAX_BACKUP_BYTES" 2>/dev/null \
+      | jq --argjson c "$efforts_reset" '.clearedEfforts = $c' 2>/dev/null \
+      | write_private "$dir/meta.json" 2>/dev/null || true
   fi
 
   # Stamp the store with fresh fingerprints read back off the files we just
@@ -1235,7 +1294,7 @@ cmd_revert() {
   # has to be undoable or it is just a second way to lose the config.
   local stamp new_dir
   stamp="$(new_backup_stamp)"; new_dir="$BACKUPS/$stamp"
-  mkdir -p "$new_dir"
+  make_backup_dir "$new_dir" || refuse "E_PERM" "Cannot create a backup directory."
 
   local files logical path
   local meta_f
@@ -1247,7 +1306,7 @@ cmd_revert() {
     logical=$(printf '%s' "$f" | jq -r '.logical')
     path="$(file_for "$logical")"
     if [ -f "$path" ]; then
-      cp -pL "$path" "$new_dir/$logical.json" \
+      backup_copy "$path" "$new_dir/$logical.json" \
         || refuse "E_PERM" "Cannot back up $(basename "$path") before undoing."
     fi
   done <<< "$files"
@@ -1265,7 +1324,8 @@ cmd_revert() {
   done <<< "$files"
   jq -n --arg ts "$stamp" --arg from "$to_id" --argjson files "$new_files" \
     '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:null, files:$files}' \
-    > "$new_dir/meta.json"
+    | write_private "$new_dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
 
   # Gate every restore before performing any of them. Checking inside the write
   # loop meant a refusal on the second file left the first one already rolled
@@ -2067,12 +2127,13 @@ repair_models() {
   local stamp dir
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
-  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
-  cp -pL "$PROFILES" "$dir/store.json" \
+  make_backup_dir "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  read_store 2>/dev/null | write_private "$dir/store.json" 2>/dev/null \
     || refuse "E_PERM" "Cannot back up the profile store."
   jq -n --arg ts "$stamp" \
     '{ts:$ts, fromProfileId:null, toProfileId:null, files:[], repair:"E_MODELS_IN_PROFILE"}' \
-    > "$dir/meta.json"
+    | write_private "$dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
 
   store_update --argjson p "$new_profile" --arg at "$(now_iso)" '
       .profiles = (.profiles | map(select(.id != $p.id)) + [$p + {updatedAt:$at}])'
@@ -2138,12 +2199,13 @@ repair_models_config() {
   local stamp dir
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
-  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
-  cp -pL "$file" "$dir/ohmy.json" \
+  make_backup_dir "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  backup_copy "$file" "$dir/ohmy.json" \
     || refuse "E_PERM" "Cannot back up $(basename "$file")."
   jq -n --arg ts "$stamp" --arg p "$file" --arg fp "$(fingerprint_logical ohmy)" \
     '{ts:$ts, fromProfileId:null, toProfileId:null, files:[{logical:"ohmy", path:$p, fingerprint:$fp}]}' \
-    > "$dir/meta.json"
+    | write_private "$dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
 
   OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
   if ! write_projected ohmy "$payload" "$mkeys" | atomic_write "$file"; then
@@ -2233,12 +2295,13 @@ repair_bare() {
 
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
-  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
-  cp -pL "$file" "$dir/opencode.json" \
+  make_backup_dir "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  backup_copy "$file" "$dir/opencode.json" \
     || refuse "E_PERM" "Cannot back up $(basename "$file")."
   jq -n --arg ts "$stamp" --arg p "$file" --arg fp "$(fingerprint_logical opencode)" \
     '{ts:$ts, fromProfileId:null, toProfileId:null, files:[{logical:"opencode", path:$p, fingerprint:$fp}]}' \
-    > "$dir/meta.json"
+    | write_private "$dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
 
   OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(opencode)
   if ! write_projected opencode "$payload" "$mkeys" | atomic_write "$file"; then
@@ -2310,12 +2373,13 @@ repair_fallback() {
   local stamp dir k
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
-  mkdir -p "$dir" || refuse "E_PERM" "Cannot create a backup directory."
-  cp -pL "$file" "$dir/ohmy.json" \
+  make_backup_dir "$dir" || refuse "E_PERM" "Cannot create a backup directory."
+  backup_copy "$file" "$dir/ohmy.json" \
     || refuse "E_PERM" "Cannot back up $(basename "$file")."
   jq -n --arg ts "$stamp" --arg p "$file" --arg fp "$(fingerprint_logical ohmy)" \
     '{ts:$ts, fromProfileId:null, toProfileId:null, files:[{logical:"ohmy", path:$p, fingerprint:$fp}]}' \
-    > "$dir/meta.json"
+    | write_private "$dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
 
   OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
   local args=(apply "$file" --payload '{}' --manages '["fallback_models"]')
@@ -2383,7 +2447,7 @@ need sha256sum
 
 # The helpers are how this reads and writes anything at all. Missing, every command
 # would refuse with a story about the profile store instead of the truth.
-for helper in safe-read safe-write jsonc-edit; do
+for helper in safe-read safe-write jsonc-edit private-dir; do
   [ -x "$SELF_DIR/$helper" ] || die "oc-profiles: $SELF_DIR/$helper is missing or not executable"
 done
 

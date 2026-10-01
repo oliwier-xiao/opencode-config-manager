@@ -6,6 +6,13 @@
 
 set -uo pipefail
 
+# Everything this writes into the cache is this user's alone, whatever umask the
+# panel was started under; opencode, which is somebody else's program, keeps the
+# umask it would have had.
+INHERITED_UMASK="$(umask)"
+umask 077
+as_caller() { ( umask "$INHERITED_UMASK"; exec "$@" ); }
+
 PLUGIN_ID="oliwier.opencode-configs"
 CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/omarchy/$PLUGIN_ID"
 TTL="${TTL:-86400}"                        # seconds; the panel passes catalogRefreshHours * 3600
@@ -38,7 +45,11 @@ OC_CACHE="${XDG_CACHE_HOME:-$HOME/.cache}/opencode/models.json"
 
 SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
-mkdir -p -m 700 "$CACHE" || { echo offline; exit 1; }
+# `mkdir -m 700` sets the mode of a folder it creates and says nothing about one that
+# is already there — 1.5.0 and earlier left this one 0755. bin/private-dir makes it
+# 0700 either way, refuses a symlink or a folder another user owns, and brings what
+# is already inside into line, all without following a link.
+"$SELF_DIR/private-dir" --tree "$CACHE" 2>/dev/null || { echo offline; exit 1; }
 
 # Ceilings, all of them at the end the bytes come out of rather than after they have
 # been materialised somewhere. models.dev/api.json is a few MB; this is room to grow.
@@ -175,7 +186,7 @@ if [ -n "$OPENCODE_BIN" ]; then
   # head -c first: a subprocess can print more than anyone expected, and the cheap
   # place to stop that is the pipe it comes out of, not the file it lands in.
   if printed="$(stage)" && reach="$(stage)"; then
-    timeout 30 "$OPENCODE_BIN" models 2>/dev/null | head -c "$MAX_REACH_BYTES" > "$printed"
+    as_caller timeout 30 "$OPENCODE_BIN" models 2>/dev/null | head -c "$MAX_REACH_BYTES" > "$printed"
     # Judged on what it printed, never on how it exited. opencode returns non-zero
     # when any single configured provider has no credentials — the exact state of
     # someone half-way through adding one — and under `pipefail` that verdict would

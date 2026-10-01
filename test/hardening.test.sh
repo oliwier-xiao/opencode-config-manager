@@ -85,7 +85,7 @@ printf '{"$schema":"x","plugin":["oh-my-openagent@latest"],"model":"anthropic/cl
 # The stalling copy stays inside a bin/ that has the helpers, or every command
 # would refuse for the wrong reason and the test would pass without testing.
 SLOWSW="$ROOT/slowsw"; mkdir -p "$SLOWSW"
-cp "$REPO/bin/safe-read" "$REPO/bin/safe-write" "$REPO/bin/jsonc-edit" "$SLOWSW/"
+cp "$REPO/bin/safe-read" "$REPO/bin/safe-write" "$REPO/bin/jsonc-edit" "$REPO/bin/private-dir" "$SLOWSW/"
 python3 - "$OC" "$SLOWSW/oc-profiles" <<'PYEOF'
 import sys, pathlib
 s = pathlib.Path(sys.argv[1]).read_text()
@@ -135,7 +135,7 @@ printf '{"$schema":"x","provider":{"anthropic":{"options":{"apiKey":"%s"}}}}' "$
 # A copy that stalls after the temporaries exist, kept inside bin/ so the helpers
 # next to it are still found.
 SLOWBIN="$ROOT/slowbin"; mkdir -p "$SLOWBIN"
-cp "$REPO/bin/safe-read" "$REPO/bin/safe-write" "$REPO/bin/jsonc-edit" "$SLOWBIN/"
+cp "$REPO/bin/safe-read" "$REPO/bin/safe-write" "$REPO/bin/jsonc-edit" "$REPO/bin/private-dir" "$SLOWBIN/"
 python3 - "$OC" "$SLOWBIN/oc-profiles" <<'PYEOF'
 import sys, pathlib
 s = pathlib.Path(sys.argv[1]).read_text()
