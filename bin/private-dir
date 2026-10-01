@@ -1,0 +1,212 @@
+#!/usr/bin/env python3
+"""private-dir — make a folder this plugin owns private, show that it is, or refuse.
+
+A backup is a byte copy of a config, provider keys and MCP bearer tokens included,
+and what kept that config private was very often its folder rather than its own
+mode: a 0644 opencode.json under a 0700 ~/.config/opencode is private, and the same
+0644 file copied below a 0755 state folder is not. Carrying the mode across does not
+carry the folder's boundary with it, so the boundary is drawn again here, on the
+folders the copies go into.
+
+  private-dir [--tree] <dir> [[--tree] <dir> ...]
+
+Each <dir> is created 0700 if it is missing. Missing parents are created under the
+caller's umask — 077 in both scripts that call this — and an existing parent is
+never changed: ~/.local/state/omarchy and the like are shared with Omarchy and every
+other plugin, and are not this one's to tighten. The path is used as given, never
+tidied as text first: "a/link/.." leads wherever the kernel says it does, and that
+is the folder the caller is about to write into. The folder is then opened once,
+with O_NOFOLLOW | O_DIRECTORY, and every decision is taken on that descriptor rather
+than on the name:
+
+  a directory, not a symlink to one       otherwise refused
+  owned by this user                      otherwise refused
+  no group or other permission bits       cleared with fchmod(2) if any are set,
+                                          then checked again
+
+A folder given as --tree <dir> also has everything below it brought into line, for
+the copies an older release made 0644 under 0755 folders. The walk goes through
+descriptors relative to the folder already opened, so no name is resolved twice:
+each entry is lstat'ed, opened with O_NOFOLLOW (and O_NONBLOCK, so nothing can stall
+inside open(2)), checked to be the same inode the lstat described, and fchmod'ed on
+that descriptor. chmod(2) by name is never used, because it follows a link. Only
+folders and regular files this user owns are changed; symlinks, FIFOs, sockets and
+devices are never opened and never changed. Neither is a file with a second name —
+a hard link is the same file living somewhere else as well, perhaps as the config
+it was copied from — nor anything on another filesystem mounted inside. A file that
+is already private is not opened at all. The walk is bounded in depth and in entries
+— the folder being private is what keeps its contents private, and the walk is the
+repair of what is already inside it.
+
+Exit: 0 every folder is private. 1 one could not be created or changed. 2 refused,
+with the reason on stderr.
+"""
+import errno
+import os
+import stat
+import sys
+
+MAX_DEPTH = 6        # root / by-config / <hash> / backups / <stamp> / <file>
+MAX_ENTRIES = 20000
+
+DIR_FLAGS = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | getattr(os, "O_CLOEXEC", 0)
+FILE_FLAGS = (os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_NOCTTY
+              | getattr(os, "O_CLOEXEC", 0))
+GROUP_OTHER = 0o077
+
+
+class Refused(Exception):
+    """The folder cannot be shown to be private, so nothing should go in it."""
+
+
+def _strip(fd, st):
+    """Clear group and other bits on this descriptor. Returns the new stat."""
+    if st.st_mode & GROUP_OTHER:
+        os.fchmod(fd, stat.S_IMODE(st.st_mode) & 0o700)
+        st = os.fstat(fd)
+    return st
+
+
+def _what_is(path):
+    """Why a path could not be opened as a folder, in words."""
+    try:
+        if stat.S_ISLNK(os.lstat(path).st_mode):
+            return "%s is a symlink, not a folder" % path
+    except OSError:
+        pass
+    return "%s is not a folder" % path
+
+
+def ensure(path):
+    """Create, open and vouch for one folder. Returns its descriptor."""
+    parent = os.path.dirname(path.rstrip("/"))
+    if parent:
+        try:
+            os.makedirs(parent, exist_ok=True)
+        except (FileExistsError, NotADirectoryError):
+            raise Refused("a part of %s is not a folder" % parent)
+    try:
+        # The mode is masked by the umask, which can only take bits away from 0700.
+        os.mkdir(path, 0o700)
+    except FileExistsError:
+        pass
+    except NotADirectoryError:
+        raise Refused("a part of %s is not a folder" % parent)
+    try:
+        fd = os.open(path, DIR_FLAGS)
+    except OSError as exc:
+        # A link at the name fails O_DIRECTORY | O_NOFOLLOW with ENOTDIR or ELOOP
+        # depending on what it points at; either way the name says which it was.
+        if exc.errno in (errno.ELOOP, errno.ENOTDIR):
+            raise Refused(_what_is(path))
+        raise
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISDIR(st.st_mode):
+            raise Refused("%s is not a folder" % path)
+        if st.st_uid != os.getuid():
+            raise Refused("%s is owned by another user" % path)
+        st = _strip(fd, st)
+        if st.st_mode & GROUP_OTHER:
+            raise Refused("%s could not be made private" % path)
+    except BaseException:
+        os.close(fd)
+        raise
+    return fd
+
+
+def walk(dfd, dev, depth, budget):
+    """Clear group and other bits below an open folder, without following links."""
+    if depth > MAX_DEPTH:
+        return
+    try:
+        # scandir reads the folder as it goes, so the entry bound below is a bound
+        # on the work as well, not only on what is acted on.
+        entries = os.scandir(dfd)
+    except OSError:
+        # A folder this user made unreadable has nothing in it this can reach.
+        return
+    uid = os.getuid()
+    with entries:
+        for entry in entries:
+            budget[0] -= 1
+            if budget[0] < 0:
+                if budget[0] == -1:
+                    sys.stderr.write("private-dir: stopped after %d entries\n" % MAX_ENTRIES)
+                return
+            name = entry.name
+            try:
+                st = os.stat(name, dir_fd=dfd, follow_symlinks=False)
+            except OSError:
+                continue
+            if st.st_uid != uid:
+                continue
+            if stat.S_ISDIR(st.st_mode):
+                # Another filesystem mounted in here is not part of this tree.
+                if st.st_dev != dev:
+                    continue
+                flags = DIR_FLAGS
+            elif stat.S_ISREG(st.st_mode):
+                if not st.st_mode & GROUP_OTHER:
+                    continue
+                # A second name is the same file somewhere else too. Tightening it
+                # here would change it there, where it may be somebody's config.
+                if st.st_nlink > 1:
+                    continue
+                flags = FILE_FLAGS
+            else:
+                continue
+            try:
+                fd = os.open(name, flags, dir_fd=dfd)
+            except OSError:
+                # ELOOP: it became a link since the lstat. Anything else: it went away.
+                continue
+            try:
+                now = os.fstat(fd)
+                if (now.st_dev, now.st_ino) != (st.st_dev, st.st_ino):
+                    continue
+                if stat.S_ISREG(now.st_mode) and now.st_nlink > 1:
+                    continue
+                _strip(fd, now)
+                if stat.S_ISDIR(now.st_mode):
+                    walk(fd, dev, depth + 1, budget)
+            except OSError:
+                continue
+            finally:
+                os.close(fd)
+
+
+def main(argv):
+    jobs, tree = [], False
+    for a in argv[1:]:
+        if a == "--tree":
+            tree = True
+            continue
+        if a.startswith("-"):
+            sys.stderr.write("private-dir: unknown option %s\n" % a)
+            return 2
+        jobs.append((a, tree))
+        tree = False
+    if not jobs:
+        sys.stderr.write(__doc__)
+        return 2
+
+    for path, tree in jobs:
+        try:
+            fd = ensure(path)
+        except Refused as exc:
+            sys.stderr.write("%s\n" % exc)
+            return 2
+        except OSError as exc:
+            sys.stderr.write("private-dir: %s: %s\n" % (path, exc.strerror))
+            return 1
+        try:
+            if tree:
+                walk(fd, os.fstat(fd).st_dev, 1, [MAX_ENTRIES])
+        finally:
+            os.close(fd)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv))

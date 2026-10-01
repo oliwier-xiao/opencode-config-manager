@@ -9,12 +9,16 @@ as well as a crash. Nothing is ever written through the destination name, so a
 reader never sees half a file and a symlink planted at the name cannot redirect the
 write into something else.
 
-  safe-write <dest> [--follow] [--mode 0644]
+  safe-write <dest> [--follow] [--mode 0644] [--allow-empty]
 
 --follow resolves a symlinked destination and writes what it points at, which is
 what someone managing their config from a dotfiles repository asked for by making
 it a link. Without it a symlink at the destination is refused outright; that is the
 right default for the files this plugin owns at predictable paths.
+
+--allow-empty writes a zero-byte input as a zero-byte file instead of refusing it.
+It is for a byte copy of a file that is itself empty — a backup has to be able to
+hold that — and never for a write over a config, where empty means something broke.
 
 Exit: 0 written. 1 could not write. 2 refused.
 """
@@ -34,11 +38,13 @@ def main(argv):
         sys.stderr.write(__doc__)
         return 2
     dest = argv[1]
-    follow, mode = False, None
+    follow, mode, allow_empty = False, None, False
     i = 2
     while i < len(argv):
         if argv[i] == "--follow":
             follow = True; i += 1
+        elif argv[i] == "--allow-empty":
+            allow_empty = True; i += 1
         elif argv[i] == "--mode":
             mode = int(argv[i + 1], 8); i += 2
         else:
@@ -51,7 +57,9 @@ def main(argv):
         # Resolve once, here, and use the result for everything below.
         dest = os.path.realpath(dest)
 
-    directory = os.path.dirname(os.path.abspath(dest)) or "."
+    # The path as given, not tidied as text: "a/link/.." leads wherever the kernel
+    # says it does, and the temporary has to land beside the name actually replaced.
+    directory = os.path.dirname(dest) or "."
 
     # A destination that already exists must be a regular file this user owns. A
     # rename over a FIFO or a device would succeed and leak nothing, but something
@@ -75,7 +83,7 @@ def main(argv):
             mode = 0o600
 
     data = sys.stdin.buffer.read()
-    if not data:
+    if not data and not allow_empty:
         return _refuse("refusing to write an empty file over %s" % dest)
 
     tmp = None
@@ -97,8 +105,9 @@ def main(argv):
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
+            # On the descriptor, not the name: chmod(2) by name follows a link.
+            os.fchmod(fh.fileno(), mode)
             os.fsync(fh.fileno())
-        os.chmod(tmp, mode)
         os.rename(tmp, dest)
         tmp = None
 

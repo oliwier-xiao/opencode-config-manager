@@ -112,6 +112,9 @@ Panel {
   property string errorCode: ""
   property string errorMessage: ""
   property string errorPath: ""
+  // Set while the error strip is showing a refusal from list or detect, so the
+  // same reads coming back clean can take down their own message and no other.
+  property bool readRefused: false
   property string toast: ""
   // Result of `oc-profiles doctor`, consumed exactly as the backend reports it.
   // Any shape mismatch clears this to [] and the section stays hidden — the panel
@@ -236,6 +239,26 @@ Panel {
     root.errorCode = String(code || "")
     root.errorMessage = String(message || "")
     root.errorPath = String(path || "")
+  }
+
+  // list and detect answer {ok:false, code, message} when the backend will not read
+  // at all — today, when the folder it keeps profiles and backups in cannot be shown
+  // to be private. That is the answer rather than a gap in one: said in the error
+  // strip, instead of the heading sitting on READING WHAT IS ON DISK for good. True
+  // when `parsed` was a refusal and the caller should use none of it.
+  function takeReadRefusal(parsed) {
+    if (!parsed) return false
+    if (parsed.ok === false) {
+      root.readRefused = true
+      root.setError(parsed.code || "E_STORE",
+                    parsed.message || "The plugin could not read its own folder.", "")
+      return true
+    }
+    if (root.readRefused) {
+      root.readRefused = false
+      root.clearError()
+    }
+    return false
   }
 
   // ---- Actions -----------------------------------------------------------
@@ -827,6 +850,7 @@ Panel {
       onStreamFinished: {
         if (!Model.withinLimit(text, root.maxOutputBytes)) return
         var parsed = Model.parseJson(text, null)
+        if (root.takeReadRefusal(parsed)) return
         if (parsed && Array.isArray(parsed.profiles)) {
           root.store = parsed
           root.loaded = true
@@ -856,6 +880,7 @@ Panel {
         if (!Model.withinLimit(text, root.maxOutputBytes)) return
         var parsed = Model.parseJson(text, null)
         if (!parsed) return
+        if (root.takeReadRefusal(parsed)) return
         root.detected = parsed
         // Detect reads the rosters off the installed software and says which of
         // the two shapes is actually running. Both have to reach Model before

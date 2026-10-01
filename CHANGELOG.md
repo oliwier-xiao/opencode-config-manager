@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.5.1
+
+Backups keep the privacy of the folder the config came from.
+
+### Fixed
+
+- **A backup is private whatever the config's own mode was.** Apply, undo and every
+  repair copied the config with `cp -pL` into state folders made by a plain `mkdir -p`.
+  Under the usual 022 umask that turned a 0644 `opencode.json` kept private by its 0700
+  folder into a 0644 copy below 0755 folders, readable by any other local user who could
+  reach `~/.local/state` — provider keys and MCP tokens included. Carrying the file's mode
+  across did not carry its folder's boundary. Now:
+  - `bin/oc-profiles` and `bin/sync-models.sh` run under `umask 077`. opencode, which they
+    start, still gets the umask they were started with.
+  - Every folder the plugin keeps anything in is created 0700. It is opened with
+    `O_NOFOLLOW | O_DIRECTORY` and checked on that descriptor: a folder, owned by this
+    user, no group or other bits (cleared with `fchmod` if set, then checked again). A
+    symlink, or a folder another user owns, is refused with `E_STORE` and nothing is
+    written into it. This is the new `bin/private-dir`.
+  - Each backup gets its own `mkdir -m 700` folder. Every copy is read through `safe-read`
+    and written by `safe-write` as a new 0600 file, never through a link. The same holds
+    for `meta.json` and the store copy a profile repair takes.
+  - What 1.5.0 and earlier left behind is closed on the next run of any command. Folders
+    and regular files below the state and cache folders lose their group and other bits,
+    through descriptors that never follow a link. A link, FIFO or device inside is never
+    opened or changed. Neither is a file with a second hard link, since tightening it
+    would change it wherever else it lives, nor a filesystem mounted inside.
+- **The panel says why it cannot read, instead of waiting for good.** A `list` or
+  `detect` that answers `{ok:false}` — for example when the state folder cannot be made
+  private — now shows its message in the error strip, where it used to be dropped. That
+  left the heading on "READING WHAT IS ON DISK". The same reads coming back clean take
+  that message down again, and only that one.
+- **The model sync writes its clocks through `safe-write`.** `date > stamp` and
+  `: > reachable.txt` followed a link planted at the name, and a FIFO there stalled the
+  sync past its timeout. Staged files are renamed with `mv -T`.
+- **`safe-write` sets the mode with `fchmod` on its descriptor**, not `chmod` by name.
+  It also uses the destination path as given: tidying `a/link/..` as text put the
+  temporary in a different folder from the one being replaced.
+- **opencode's `model.json` is written without following a link**, the same as it is
+  read. The read already refused one.
+
+### Tests
+
+- `test/private.test.sh` (145 checks). It covers a 0644 config in a 0700 folder under a
+  022 umask, through apply, undo, the undo of an undo, and all four repairs. Every folder
+  must be 0700 and every copy 0600, and the copies must be byte-identical. The live config
+  keeps its own 0644. It also checks:
+  - the same result under umask 000;
+  - an old 0755/0644 tree is closed by `list`, `detect`, `doctor`, `backups` and `capture`;
+  - a link to a file or folder inside the tree is not followed, a hard-linked file keeps
+    its mode, and a FIFO does not stall;
+  - a symlinked state root, backups folder or cache folder is refused, and the refusal
+    says why;
+  - the default config folder (store in the state root) and a state path through
+    `link/..` work;
+  - the model sync tightens its cache, and neither writes through a link at a stamp's
+    name nor stalls on a FIFO at its list.
+- `test/qml.test.sh`: the panel's refusal handling, spliced out of `Panel.qml` and run in
+  a real QML engine.
+- `test/effort.test.sh`: a linked `model.json` is neither read nor written through.
+
 ## 1.5.0
 
 Support for oh-my-openagent 5.x.

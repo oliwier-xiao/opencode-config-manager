@@ -114,5 +114,20 @@ is "a bare-string fallback is forgotten" "$(eff "$D" "$SONNET")" "unset"
 is "one nobody named is not"             "$(eff "$D" "$HAIKU")" "default"
 fi
 
+echo "=== a model.json that is a link is neither read nor written through ==="
+# opencode's state file sits at a path anything running as this user can predict.
+# The read already refuses a link; the write is held to the same rule, so nothing
+# between the two can turn it into a write somewhere else.
+D=$(fresh linked); seed_state "$D"
+mv "$D/state/opencode/model.json" "$D/elsewhere.json"
+ln -s "$D/elsewhere.json" "$D/state/opencode/model.json"
+BEFORE=$(sha256sum < "$D/elsewhere.json")
+A=$(run "$D" apply eff)
+is "the switch still succeeds"           "$(jq -r .ok <<<"$A")" "true"
+is "and forgets nothing"                 "$(jq -r .effortsReset <<<"$A")" "0"
+is "what the link points at is untouched" "$(sha256sum < "$D/elsewhere.json")" "$BEFORE"
+[ -L "$D/state/opencode/model.json" ] && ok "the link is still a link" \
+  || no "the link is still a link" "it was replaced"
+
 printf '\n%d passed' "$pass"; [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"; printf '\n'
 [ "$fail" -eq 0 ]
