@@ -52,7 +52,13 @@ open with `O_NOFOLLOW` and `O_NONBLOCK`, the type, owner and size judged on that
 descriptor rather than on the name, and only the bytes that were vouched for read back
 through it. Every file it writes goes through `bin/safe-write`: an `O_EXCL`,
 `O_NOFOLLOW`, mode 0600 temporary in the destination's own directory, fsync, rename,
-and an fsync of the directory. omarchy-shell is one process for the whole desktop, so
+and an fsync of the directory. Everything it keeps — profiles, backups, the model cache —
+sits in folders `bin/private-dir` has shown to be private: created 0700, opened without
+following a link, owned by you, group and other bits cleared on that descriptor; the
+copies inside are 0600, and the scripts run under `umask 077`. A backup holds whatever
+your config holds, so it does not inherit the config's own mode: a 0644 config kept
+private by its 0700 folder would otherwise become a readable copy somewhere else.
+omarchy-shell is one process for the whole desktop, so
 nothing read on its behalf may block inside `open(2)` or be larger than it said it
 was. The one exception is `assets/templates.json`, which ships inside the plugin and
 is read by the shell's own `FileView`; anything able to rewrite that can rewrite the
@@ -331,7 +337,7 @@ it is signalled, and a server you are running is left alone.
 ./test/run.sh
 ```
 
-353 checks over the reader and writer, the model-cache sync, the hardening, the row model, the JSONC editor,
+513 checks over the reader and writer, the model-cache sync, the hardening, the privacy of every folder and backup it keeps, the row model, the JSONC editor,
 shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
 One suite points outward: `upstream.test.sh` asserts what this plugin assumes about the two
 programs it sits between, against the copies actually installed — schema location, agent and
@@ -444,6 +450,12 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 | `~/.local/state/omarchy/opencode-configs/profiles.json` | your profiles, favourites and recents |
 | `~/.local/state/omarchy/opencode-configs/backups/` | one folder per switch, with a copy of each file |
 | `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on panel open when stale |
+
+Both folders, and every folder below them, are 0700, and every file in them is 0600 —
+a backup is a full copy of your config, keys and tokens included. A folder that is a
+symlink or belongs to another user is refused rather than written into. Folders and
+files an earlier release left 0755 or 0644 are tightened the next time any command
+runs; links inside are never followed, and your own config keeps the mode you gave it.
 
 Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
 the keys a profile claims.
