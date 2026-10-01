@@ -57,7 +57,9 @@ def main(argv):
         # Resolve once, here, and use the result for everything below.
         dest = os.path.realpath(dest)
 
-    directory = os.path.dirname(os.path.abspath(dest)) or "."
+    # The path as given, not tidied as text: "a/link/.." leads wherever the kernel
+    # says it does, and the temporary has to land beside the name actually replaced.
+    directory = os.path.dirname(dest) or "."
 
     # A destination that already exists must be a regular file this user owns. A
     # rename over a FIFO or a device would succeed and leak nothing, but something
@@ -103,8 +105,9 @@ def main(argv):
         with os.fdopen(fd, "wb") as fh:
             fh.write(data)
             fh.flush()
+            # On the descriptor, not the name: chmod(2) by name follows a link.
+            os.fchmod(fh.fileno(), mode)
             os.fsync(fh.fileno())
-        os.chmod(tmp, mode)
         os.rename(tmp, dest)
         tmp = None
 
