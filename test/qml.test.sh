@@ -466,6 +466,59 @@ else
   no "ProfileEditor.openFallbackPicker can be found" "extraction failed — was it renamed?"
 fi
 
+# ---- a read that was refused is said, not waited on ---------------------------
+
+# list and detect answer {ok:false, code, message} when the backend will not read
+# at all — when the folder it keeps profiles and backups in cannot be shown to be
+# private. Dropped, that leaves the heading on READING WHAT IS ON DISK for good.
+echo "=== a refused list or detect reaches the error strip ==="
+READREF="$(extract_fn "$REPO/Panel.qml" takeReadRefusal)" || READREF=""
+SETERR="$(extract_fn "$REPO/Panel.qml" setError)" || SETERR=""
+CLRERR="$(extract_fn "$REPO/Panel.qml" clearError)" || CLRERR=""
+if [ -n "$READREF" ] && [ -n "$SETERR" ] && [ -n "$CLRERR" ]; then
+  cat > "$T/Refusal.qml" <<QML
+import QtQuick
+Item {
+  id: root
+  property string errorCode: ""
+  property string errorMessage: ""
+  property string errorPath: ""
+  property bool readRefused: false
+$CLRERR
+$SETERR
+$READREF
+  property int failed: 0
+  function check(c) { if (!c) root.failed++ }
+  Component.onCompleted: {
+    try {
+      // A refusal is the answer: it is shown, and the caller is told to stop.
+      check(root.takeReadRefusal({ ok: false, code: "E_STORE", message: "not private" }) === true)
+      check(root.errorCode === "E_STORE" && root.errorMessage === "not private")
+      // The same read coming back clean takes its own message down again ...
+      check(root.takeReadRefusal({ profiles: [] }) === false)
+      check(root.errorCode === "" && root.errorMessage === "")
+      // ... and never one a switch put up.
+      root.setError("E_WRITE", "The write failed", "")
+      check(root.takeReadRefusal({ profiles: [] }) === false)
+      check(root.errorCode === "E_WRITE")
+      // Nothing parsed is not a refusal, and changes nothing.
+      check(root.takeReadRefusal(null) === false)
+      check(root.errorCode === "E_WRITE")
+    } catch (err) { root.failed = 99 }
+    Qt.exit(root.failed)
+  }
+}
+QML
+  QT_QPA_PLATFORM=offscreen timeout 60 "$QMLBIN" "$T/Refusal.qml" >/dev/null 2>&1 \
+    && ok "a refusal is shown, and only a read's own message is taken down by a read" \
+    || no "a refusal is shown, and only a read's own message is taken down by a read" "rc=$?"
+  N="$(grep -cF 'if (root.takeReadRefusal(parsed)) return' "$REPO/Panel.qml")"
+  [ "$N" = 2 ] && ok "both list and detect ask it before using what they read" \
+               || no "both list and detect ask it before using what they read" "found $N call sites"
+else
+  no "Panel.takeReadRefusal can be found" "extraction failed — was it renamed?"
+fi
+
 printf '\n%d passed' "$pass"
 [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"
 printf '\n'

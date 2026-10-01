@@ -37,7 +37,7 @@ mk(){ local d="$ROOT/$1"; rm -rf "$d"; mkdir -p "$d/cfg" "$d/omo" "$d/cache" "$d
   chmod 0644 "$d/cfg/opencode.json"
   printf '%s' "$d"; }
 run(){ local d="$1"; shift
-  OPENCODE_CONFIG_DIR="$d/cfg" OMO_CONFIG_HOME="$d/omo" \
+  OPENCODE_CONFIG_DIR="$d/cfg" OMO_CONFIG_HOME="$d/omo" XDG_DATA_HOME="$d/data" \
   XDG_CACHE_HOME="$d/cache" XDG_STATE_HOME="$d/state" OC_AUTO_RELOAD=0 "$OC" "$@"; }
 root_of(){ printf '%s' "$1/state/omarchy/opencode-configs"; }
 state_of(){ local h; h="$(printf '%s' "$1/cfg" | sha256sum | cut -c1-12)"
@@ -66,6 +66,7 @@ backup_is_private(){ local d="$1" ts="$2" what="$3" f
   is "$what: the state root is 0700"        "$(mode "$(root_of "$d")")" "700"
   is "$what: the backups folder is 0700"    "$(mode "$(state_of "$d")/backups")" "700"
   is "$what: the backup folder is 0700"     "$(mode "$bd")" "700"
+  is "$what: the cache folder is 0700"      "$(mode "$(cache_of "$d")")" "700"
   for f in "$bd"/*; do
     is "$what: $(basename "$f") is 0600"    "$(mode "$f")" "600"
   done
@@ -184,6 +185,11 @@ printf 'NOT OURS' > "$D/outside.txt"; chmod 0644 "$D/outside.txt"
 mkdir -p "$D/outside.d"; chmod 0755 "$D/outside.d"
 ln -s "$D/outside.txt" "$(state_of "$D")/backups/$TS/link.json"
 ln -s "$D/outside.d" "$(state_of "$D")/backups/linked-dir"
+# A hard link is the same file under a second name — one a dedupe tool can make
+# between an old 0644 backup and the live config it was copied from. Tightening it
+# would change the config's own mode, so a file with more than one name is left be.
+printf 'ALSO NOT OURS' > "$D/hard-outside.json"; chmod 0644 "$D/hard-outside.json"
+ln "$D/hard-outside.json" "$(state_of "$D")/backups/$TS/hard.json"
 # And a FIFO, which an open without O_NONBLOCK would sit inside for ever.
 mkfifo "$(state_of "$D")/backups/$TS/pipe"
 OUT=$(timeout 20 env OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" \
@@ -196,12 +202,13 @@ is "the old store is 0600 now"              "$(mode "$(store_of "$D")")" "600"
 is "the old cache folder is 0700 now"       "$(mode "$(cache_of "$D")")" "700"
 is "the file a link points at kept 0644"    "$(mode "$D/outside.txt")" "644"
 is "the folder a link points at kept 0755"  "$(mode "$D/outside.d")" "755"
+is "a hard-linked file kept its 0644"       "$(mode "$D/hard-outside.json")" "644"
 [ -L "$(state_of "$D")/backups/$TS/link.json" ] && [ -L "$(state_of "$D")/backups/linked-dir" ] \
   && ok "and both links are still links" || no "and both links are still links" "one was replaced"
 # Only folders and regular files are tightened; the planted entries were there to be
 # stepped around, and have had their say.
 rm -f "$(state_of "$D")/backups/$TS/link.json" "$(state_of "$D")/backups/linked-dir" \
-      "$(state_of "$D")/backups/$TS/pipe"
+      "$(state_of "$D")/backups/$TS/pipe" "$(state_of "$D")/backups/$TS/hard.json"
 backup_is_private "$D" "$TS" "migrated"
 echo "--- the same tree is closed by every other entry point too ---"
 for cmd in detect doctor backups "capture C c"; do
@@ -216,6 +223,10 @@ mkdir -p "$D/state/omarchy" "$D/elsewhere"; chmod 0755 "$D/elsewhere"
 ln -s "$D/elsewhere" "$(root_of "$D")"
 OUT=$(run "$D" capture "A" a 2>/dev/null); rc=$?
 is "a symlinked state root is refused"      "$(jq -r '.code // "none"' <<<"$OUT" 2>/dev/null)" "E_STORE"
+case "$(jq -r '.message // ""' <<<"$OUT" 2>/dev/null)" in
+  *symlink*) ok "and says it is a symlink" ;;
+  *) no "and says it is a symlink" "said: $(jq -r '.message // ""' <<<"$OUT" 2>/dev/null)" ;;
+esac
 is "with exit 2"                            "$rc" "2"
 is "and nothing was written where it points" "$(ls -A "$D/elsewhere" | wc -l)" "0"
 is "nor was that folder's mode changed"     "$(mode "$D/elsewhere")" "755"
@@ -241,6 +252,39 @@ OUT=$(run "$D" detect 2>/dev/null); rc=$?
 is "a symlinked cache folder is refused"    "$(jq -r '.code // "none"' <<<"$OUT" 2>/dev/null)" "E_STORE"
 is "and nothing was staged where it points" "$(grep -rl "$CANARY" "$D/elsewhere" 2>/dev/null | wc -l)" "0"
 
+echo "=== the default config folder: the store sits in the state root itself ==="
+# Every other case points OPENCODE_CONFIG_DIR somewhere, which puts the store a
+# level down in by-config/<hash>. The usual install has no such variable.
+D=$(mk default)
+mkdir -p "$D/xdg"; mv "$D/cfg" "$D/xdg/opencode"
+rund(){ env -u OPENCODE_CONFIG_DIR XDG_CONFIG_HOME="$D/xdg" OMO_CONFIG_HOME="$D/omo" \
+  XDG_DATA_HOME="$D/data" XDG_CACHE_HOME="$D/cache" XDG_STATE_HOME="$D/state" \
+  OC_AUTO_RELOAD=0 "$OC" "$@"; }
+rund capture "A" a >/dev/null 2>&1
+OC_PROFILE_JSON='{"id":"b","name":"B","targets":[{"file":"opencode","shape":"opencode","manages":["model"],"payload":{"model":"anthropic/claude-opus-5"}}]}' \
+  rund save >/dev/null 2>&1
+is "the switch landed"                      "$(rund apply b 2>/dev/null | jq -r .ok)" "true"
+is "the undo landed"                        "$(rund revert 2>/dev/null | jq -r .ok)" "true"
+[ -f "$(root_of "$D")/profiles.json" ] && [ ! -e "$(root_of "$D")/by-config" ] \
+  && ok "the store is in the root, not in by-config" || no "the store is in the root" "it is not"
+is "the state root is 0700"                 "$(mode "$(root_of "$D")")" "700"
+is "its backups folder is 0700"             "$(mode "$(root_of "$D")/backups")" "700"
+is "and nothing in it is open"              "$(opened "$(root_of "$D")")" ""
+is "the live config kept its 0644"          "$(mode "$D/xdg/opencode/opencode.json")" "644"
+
+echo "=== a state path with .. in it is checked where it really leads ==="
+# bash resolves "$X/link/.." through the link; tidying the path as text first would
+# check one folder and then write into another.
+D=$(mk dotdot)
+mkdir -p "$D/real/sub"; ln -s "$D/real/sub" "$D/lnk"
+OUT=$(OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" XDG_DATA_HOME="$D/data" \
+  XDG_CACHE_HOME="$D/cache" XDG_STATE_HOME="$D/lnk/.." OC_AUTO_RELOAD=0 "$OC" capture "A" a 2>/dev/null)
+is "the capture landed"                     "$(jq -r .ok <<<"$OUT" 2>/dev/null)" "true"
+is "the folder written into is the one made private" \
+   "$(mode "$D/real/omarchy/opencode-configs")" "700"
+[ ! -e "$D/omarchy" ] && ok "and none was made where the text alone points" \
+  || no "and none was made where the text alone points" "$D/omarchy exists"
+
 echo "=== the model sync keeps its cache private too ==="
 D=$(mk sync)
 mkdir -p "$D/bin"
@@ -264,6 +308,20 @@ S=$(PATH="$D/bin:$PATH" OPENCODE_BIN="$D/bin/opencode" XDG_CACHE_HOME="$D/cache"
 is "the sync ran"                           "$S" "fresh"
 is "the cache folder is 0700"               "$(mode "$(cache_of "$D")")" "700"
 is "nothing in it is open"                  "$(opened "$(cache_of "$D")")" ""
+# Its own small files are written like everything else: never through a link a
+# stamp name has become, and never into a FIFO, which an open for writing waits on.
+printf 'NOT OURS' > "$D/victim"; chmod 0644 "$D/victim"
+rm -f "$(cache_of "$D")/reachable.stamp" "$(cache_of "$D")/reachable.txt"
+ln -s "$D/victim" "$(cache_of "$D")/reachable.stamp"
+mkfifo "$(cache_of "$D")/reachable.txt"
+printf '#!/usr/bin/env bash\nexit 0\n' > "$D/bin/opencode"   # prints nothing at all
+S=$(PATH="$D/bin:$PATH" OPENCODE_BIN="$D/bin/opencode" XDG_CACHE_HOME="$D/cache" FORCE=1 \
+    timeout -k 2 20 "$REPO/bin/sync-models.sh" 2>/dev/null); rc=$?
+# 124 is the timeout's TERM; 137 is the KILL that follows it when bash has gone on
+# waiting inside open(2), which is what a FIFO does to `: >`.
+case "$rc" in 124|137) no "a FIFO at the reachable list does not stall the sync" "hit the timeout (rc=$rc)" ;;
+  *) ok "a FIFO at the reachable list does not stall the sync" ;; esac
+is "nothing was written through the stamp link" "$(cat "$D/victim")" "NOT OURS"
 rm -rf "$(cache_of "$D")"; mkdir -p "$D/elsewhere2"; chmod 0755 "$D/elsewhere2"
 ln -s "$D/elsewhere2" "$(cache_of "$D")"
 S=$(PATH="$D/bin:$PATH" OPENCODE_BIN="$D/bin/opencode" XDG_CACHE_HOME="$D/cache" FORCE=1 \

@@ -71,6 +71,12 @@ trap cleanup EXIT INT TERM HUP
 # to the run that made it. Anything left over an hour is from a run that is gone.
 find "$CACHE" -maxdepth 1 -name '.stage.*' -type f -mmin +60 -delete 2>/dev/null || true
 stage() { mktemp "${STAGE_PREFIX}XXXXXXXX" 2>/dev/null; }
+# The clocks are small files at names anything running as this user can predict, so
+# they are written like everything else here: renamed into place by bin/safe-write,
+# never through a link planted at the name and never into a FIFO, which `>` would
+# open and then wait on for good. The staged files above are renamed with `mv -T`
+# for the same reason: a folder at the name is refused rather than moved into.
+stamp_now() { date +%s | "$SELF_DIR/safe-write" "$1" 2>/dev/null || true; }
 
 command -v jq >/dev/null 2>&1 || { echo offline; exit 1; }
 
@@ -111,7 +117,7 @@ fi
 status=cached
 if [ "$RAW_FRESH" = 0 ] && [ "$CAT_TRIED_RECENTLY" = 0 ]; then
 status=offline
-date +%s > "$CAT_ATTEMPT" 2>/dev/null || true
+stamp_now "$CAT_ATTEMPT"
 
 # opencode keeps a byte-identical mirror of models.dev; using it when newer costs no request.
 if [ -s "$OC_CACHE" ] && { [ ! -s "$RAW" ] || [ "$OC_CACHE" -nt "$RAW" ]; }; then
@@ -119,7 +125,7 @@ if [ -s "$OC_CACHE" ] && { [ ! -s "$RAW" ] || [ "$OC_CACHE" -nt "$RAW" ]; }; the
   # the descriptor, bounded, rather than copied by name.
   if t="$(stage)" && "$SELF_DIR/safe-read" "$OC_CACHE" --max-bytes "$MAX_FETCH_BYTES" \
        --no-empty --label "opencode's model cache" > "$t" 2>/dev/null; then
-    mv -f "$t" "$RAW" && status=local
+    mv -fT "$t" "$RAW" && status=local
   fi
 fi
 
@@ -145,7 +151,7 @@ if command -v curl >/dev/null 2>&1; then
       200) if checked="$(stage)" \
               && "$SELF_DIR/safe-read" "$fetched" --max-bytes "$MAX_FETCH_BYTES" \
                    --no-empty --label "the model catalogue" > "$checked" 2>/dev/null; then
-             mv -f "$checked" "$RAW" && status=fresh && etag_pending="$etag_new"
+             mv -fT "$checked" "$RAW" && status=fresh && etag_pending="$etag_new"
            fi ;;
       304) [ "$status" = local ] || status=unchanged ;;
       *)   [ -s "$RAW" ] && [ "$status" != local ] && status=stale ;;
@@ -180,7 +186,7 @@ fi
 # the clock REACH_TTL is read from, so a failure that left it untouched would be
 # retried on the next panel open, and the one after that — a broken or missing
 # opencode would put a fresh thirty-second subprocess behind every click on the bar.
-date +%s > "$REACH_STAMP" 2>/dev/null || true
+stamp_now "$REACH_STAMP"
 
 if [ -n "$OPENCODE_BIN" ]; then
   # head -c first: a subprocess can print more than anyone expected, and the cheap
@@ -200,11 +206,11 @@ if [ -n "$OPENCODE_BIN" ]; then
     if [ -s "$printed" ] && [ -z "$(tail -c 1 "$printed")" ]; then
       sed -E 's/[[:space:]]+$//' "$printed" \
         | grep -E '^[A-Za-z0-9~._-]+/' > "$reach" 2>/dev/null
-      [ -s "$reach" ] && mv -f "$reach" "$REACH"
+      [ -s "$reach" ] && mv -fT "$reach" "$REACH"
     fi
   fi
 fi
-[ -s "$REACH" ] || : > "$REACH"
+[ -s "$REACH" ] || printf '' | "$SELF_DIR/safe-write" "$REACH" --allow-empty 2>/dev/null || true
 
 # ---------------------------------------------------------------- join
 
@@ -304,7 +310,7 @@ if [ -s "$staged" ] && [ "$(stat -c %s "$staged" 2>/dev/null || echo 0)" -gt "$M
 fi
 
 if [ -s "$staged" ] && jq -e '.models | length > 0' "$staged" >/dev/null 2>&1; then
-  mv -f "$staged" "$OUT"
+  mv -fT "$staged" "$OUT"
   # Here, and only here, and only for the three answers that are actually about the
   # catalogue: a body that parsed (`fresh`), opencode's own newer copy (`local`), or
   # models.dev saying our copy is still current (`unchanged`, a 304). A run whose
@@ -314,13 +320,13 @@ if [ -s "$staged" ] && jq -e '.models | length > 0' "$staged" >/dev/null 2>&1; t
   if [ "$RAW_FRESH" = 0 ]; then
     case "$status" in
       fresh|local|unchanged)
-        date +%s > "$CAT_STAMP" 2>/dev/null
+        stamp_now "$CAT_STAMP"
         # The ETag becomes the truth about what is on disk only now. Saved any
         # earlier, a body that was accepted by size and then turned out not to be a
         # catalogue would have every later request answered 304 — a permanent
         # day-old list, repairable only by deleting the cache. Which is exactly
         # what people did.
-        [ -n "${etag_pending:-}" ] && [ -s "$etag_pending" ] && mv -f "$etag_pending" "$ETAG" ;;
+        [ -n "${etag_pending:-}" ] && [ -s "$etag_pending" ] && mv -fT "$etag_pending" "$ETAG" ;;
     esac
   fi
   # A run that ends here has a list. `cached` means it skipped the downloads;

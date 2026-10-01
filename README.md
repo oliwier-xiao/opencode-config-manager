@@ -337,7 +337,7 @@ it is signalled, and a server you are running is left alone.
 ./test/run.sh
 ```
 
-513 checks over the reader and writer, the model-cache sync, the hardening, the privacy of every folder and backup it keeps, the row model, the JSONC editor,
+539 checks over the reader and writer, the model-cache sync, the hardening, the privacy of every folder and backup it keeps, the row model, the JSONC editor,
 shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
 One suite points outward: `upstream.test.sh` asserts what this plugin assumes about the two
 programs it sits between, against the copies actually installed — schema location, agent and
@@ -451,11 +451,13 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 | `~/.local/state/omarchy/opencode-configs/backups/` | one folder per switch, with a copy of each file |
 | `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on panel open when stale |
 
-Both folders, and every folder below them, are 0700, and every file in them is 0600 —
-a backup is a full copy of your config, keys and tokens included. A folder that is a
-symlink or belongs to another user is refused rather than written into. Folders and
-files an earlier release left 0755 or 0644 are tightened the next time any command
-runs; links inside are never followed, and your own config keeps the mode you gave it.
+Both folders, and every folder below them, are 0700, and every file the plugin writes
+there is 0600 — a backup is a full copy of your config, keys and tokens included. A
+folder that is a symlink or belongs to another user is refused, and the panel says so,
+rather than anything being written into it. Folders and files an earlier release left
+0755 or 0644 are tightened the next time any command runs. Links inside are never
+followed, and a file with a second hard link is left alone. Your own config keeps the
+mode you gave it.
 
 Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
 the keys a profile claims.
