@@ -31,6 +31,21 @@ Nothing read out of a config goes on a command line.
 - **A refusal's message goes to jq on stdin.** `E_MODEL_SYNTAX` quotes the model string it
   refused, and a key pasted into a model field by mistake is exactly the string that is
   not a provider/model id.
+- **The profile the panel hands over stops at `oc-profiles`.** `save` and `prefs` get their
+  JSON in the environment, which only your own account can read. It used to stay
+  exported, so every `jq`, `python3` and `flock` the command started inherited it. It is
+  now taken into plain shell variables before anything is started, and unset.
+- **`jsonc-edit` fails cleanly, and without quoting your config.**
+  - A payload or config nested a few hundred levels deep, or a string JSON will not
+    decode, is refused with exit 1 instead of a Python traceback.
+  - A malformed value is reported by its offset rather than quoted. The panel logs this
+    command's stderr, and the value was a piece of a file that holds keys.
+  - The result is written as UTF-8 whatever the locale. Under a latin-1 locale, or a
+    `PYTHONIOENCODING` that is not UTF-8, a config with one non-ASCII comment used to
+    come back re-encoded, or not at all.
+  - The payload is read whole before the file is opened, so a refusal never leaves the
+    caller writing into a pipe nobody reads. A reader that has gone ends it with exit 1
+    and no traceback.
 - **A killed run cleans up after itself, as the comments always said it did.** The temp
   prefix the exit and signal traps remove was assigned inside `$( )`, so the traps held
   an empty one and removed nothing. A run stopped by the 30-second timebox left its
@@ -45,7 +60,7 @@ Nothing read out of a config goes on a command line.
 
 ### Tests
 
-- `test/argv.test.sh` (48 checks where `strace` can trace, 38 where it cannot). It plants
+- `test/argv.test.sh` (50 checks where `strace` can trace, 40 where it cannot). It plants
   a different secret in each place one lives: a provider key, an MCP header, `auth.json`,
   `~/.opencode`, an oh-my-openagent key, an agent prompt, a profile payload, and a key
   pasted into a model field. Then it runs every verb, including all four repairs (dry and
@@ -54,10 +69,15 @@ Nothing read out of a config goes on a command line.
   and through `strace` when that is installed and allowed. Any planted secret in any argv
   fails it. The recorder is shown to catch a secret passed as an argument, and the run is
   shown to have reached `jsonc-edit apply`, so the suite cannot pass by recording nothing.
-  Against 1.5.1 it fails on exactly the line the marketplace review named.
+  Against 1.5.1 it fails on exactly the line the marketplace review named. It also checks
+  that the panel's profile, handed over in the environment, reaches no command beyond the
+  ones that start `oc-profiles` itself.
 - `test/jsonc.test.py`: the payload goes in on stdin. `--payload` in both spellings is
   refused, as are an empty, malformed or non-object payload and a terminal. A payload at
-  the cap lands whole, and one byte more is refused.
+  the cap lands whole, and one byte more is refused. Deep nesting in either the payload or
+  the config, and an undecodable string, fail without a traceback. A malformed value is
+  never quoted. The result is UTF-8 under an ASCII locale, and a reader that has gone
+  ends the run quietly.
 - `test/detect.test.sh` skips the opencode roster check when opencode is not installed, as
   `upstream.test.sh` already did.
 

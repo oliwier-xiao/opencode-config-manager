@@ -183,5 +183,78 @@ def read_ignores_stdin():
         os.unlink(p)
 t("read takes nothing from stdin", read_ignores_stdin)
 
+print("\n--- failing without a traceback, and without quoting the file ---")
+def clean_failure(args, stdin=None, want="", env=None):
+    r = subprocess.run([JE] + args, input=stdin, capture_output=True, text=True, timeout=60,
+                       env=env)
+    assert r.returncode == 1, "exit %d, wanted 1" % r.returncode
+    assert "Traceback" not in r.stderr, "a traceback: %s" % r.stderr.strip().splitlines()[-1]
+    assert want in r.stderr, "stderr %r does not say %r" % (r.stderr.strip()[:200], want)
+    return r
+
+def deep_payload():
+    p = tmp(PLAIN)
+    try:
+        clean_failure(["apply", p, "--manages", '["model"]'],
+                      stdin="[" * 200000 + "]" * 200000, want="nested too deeply")
+    finally:
+        os.unlink(p)
+t("a payload nested past the recursion limit is refused, not a traceback", deep_payload)
+
+def deep_config():
+    p = tmp('{"a": ' + "[" * 5000 + "]" * 5000 + "}")
+    try:
+        clean_failure(["read", p], want="nested too deeply")
+    finally:
+        os.unlink(p)
+t("so is a config nested that deep", deep_config)
+
+def bad_escape():
+    p = tmp('{"model": "a/b\\q"}')
+    try:
+        clean_failure(["read", p], want="not readable JSONC")
+    finally:
+        os.unlink(p)
+t("a string json will not decode is refused, not a traceback", bad_escape)
+
+def token_not_quoted():
+    secret = "sk-UNQUOTED-%d" % os.getpid()
+    p = tmp('{"provider": {"x": {"options": {"apiKey": %s}}}}' % secret)
+    try:
+        r = clean_failure(["read", p], want="cannot read the value at")
+        assert secret not in r.stderr, "the error quoted the file: %s" % r.stderr.strip()
+    finally:
+        os.unlink(p)
+t("a malformed value is located, never quoted", token_not_quoted)
+
+def utf8_whatever_the_locale():
+    text = '// zażółć gęślą jaźń\n{\n  "model": "a/b",\n  "note": "naïve – café"\n}\n'
+    p = tmp(text)
+    try:
+        env = dict(os.environ, PYTHONIOENCODING="ascii", LC_ALL="C", LANG="C")
+        r = subprocess.run([JE, "apply", p, "--manages", '["model"]', ], input=b'{"model":"c/d"}',
+                           capture_output=True, timeout=30, env=env)
+        assert r.returncode == 0, "exit %d: %s" % (r.returncode, r.stderr.decode(errors="replace"))
+        out = r.stdout.decode("utf-8")
+        assert "zażółć gęślą jaźń" in out and "naïve – café" in out, "re-encoded: %r" % out[:120]
+        assert '"model": "c/d"' in out, "the edit did not land: %r" % out
+    finally:
+        os.unlink(p)
+t("the result is UTF-8 under an ASCII locale, comments and values intact", utf8_whatever_the_locale)
+
+def reader_gone():
+    p = tmp(PLAIN)
+    try:
+        proc = subprocess.Popen([JE, "apply", p, "--manages", '["model"]'], stdin=subprocess.PIPE,
+                                stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+        proc.stdout.close()          # gone before a byte is written
+        proc.stdin.write(b'{"model":"c/d"}'); proc.stdin.close()
+        err = proc.stderr.read().decode(errors="replace"); rc = proc.wait(timeout=30)
+        assert rc == 1, "exit %d, wanted 1" % rc
+        assert "Traceback" not in err and "Exception ignored" not in err, "noise: %s" % err.strip()
+    finally:
+        os.unlink(p)
+t("a reader that has gone ends it quietly, with a failure", reader_gone)
+
 print("\n" + (("FAILED %d / " % failed) if failed else "") + "%d passed" % passed)
 sys.exit(1 if failed else 0)

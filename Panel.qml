@@ -427,8 +427,9 @@ Panel {
   function saveProfile(profile, onDone) {
     var env = {}
     for (var k in root.actionEnv) env[k] = root.actionEnv[k]
-    // Quickshell's Process cannot write to a child's stdin, so the profile travels
-    // in the environment — not argv, which every process listing on the box shows.
+    // The profile travels in the environment, never in argv: every account on the
+    // machine can read a process's argv through /proc, and its environment only
+    // this one. bin/oc-profiles unsets it once read, so nothing it starts inherits it.
     env["OC_PROFILE_JSON"] = JSON.stringify(profile)
     runAction(["save"], env, onDone)
   }

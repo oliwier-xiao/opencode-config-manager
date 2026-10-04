@@ -124,7 +124,9 @@ class Scanner:
         try:
             v = json.loads(raw)
         except Exception:
-            raise Bad("cannot read %r at %d" % (raw, start))
+            # Located, never quoted: the token is a piece of a file that holds
+            # provider keys, and this message ends up wherever stderr does.
+            raise Bad("cannot read the value at %d" % start)
         return v, {"kind": "value", "start": start, "end": self.i}
 
     def obj(self):
@@ -302,16 +304,41 @@ def read_payload(stream):
         raise Bad("apply reads the payload on stdin, and there is no stdin")
     if stream.isatty():
         raise Bad("apply reads the payload on stdin; pipe it in")
-    raw = stream.buffer.read(MAX_PAYLOAD_BYTES + 1)
-    if len(raw) > MAX_PAYLOAD_BYTES:
-        raise Bad("the payload is larger than %d bytes" % MAX_PAYLOAD_BYTES)
+    # A loop, because a read may come back short of what was asked for without
+    # the stream being at its end.
+    chunks, total = [], 0
+    while True:
+        chunk = stream.buffer.read(min(65536, MAX_PAYLOAD_BYTES + 1 - total))
+        if chunk is None:
+            raise Bad("stdin is non-blocking and had nothing to read")
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > MAX_PAYLOAD_BYTES:
+            raise Bad("the payload is larger than %d bytes" % MAX_PAYLOAD_BYTES)
+    # RecursionError is not a ValueError: a payload nested a few hundred deep would
+    # otherwise end this in a traceback. The decoder's own message is not passed
+    # on either; its exception carries the payload it was decoding.
     try:
-        payload = json.loads(raw.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError):
-        raise Bad("the payload on stdin is not JSON")
+        payload = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise Bad("the payload on stdin is not JSON, or is nested too deeply") from None
     if not isinstance(payload, dict):
         raise Bad("the payload on stdin is not a JSON object")
     return payload
+
+
+def emit(text):
+    """The result, as UTF-8 whatever the locale says.
+
+    The file was read as UTF-8, so it is written back as UTF-8. Going through
+    sys.stdout instead encodes in the locale's charset: under a latin-1 locale,
+    or a PYTHONIOENCODING that is not UTF-8, a config with one non-ASCII comment
+    would come back re-encoded, or not at all.
+    """
+    sys.stdout.buffer.write(text.encode("utf-8"))
+    sys.stdout.buffer.flush()
 
 
 def main(argv):
@@ -350,6 +377,24 @@ def main(argv):
             sys.stderr.write("jsonc-edit: unknown option %s\n" % a)
             return 1
 
+    if mode not in ("read", "apply"):
+        sys.stderr.write("jsonc-edit: unknown mode %s\n" % mode)
+        return 1
+
+    # The payload is taken whole before the file is so much as opened. A refusal
+    # further down then leaves nobody upstream writing into a pipe that has
+    # stopped being read.
+    payload = None
+    if mode == "apply":
+        if manages is None:
+            sys.stderr.write("jsonc-edit: apply needs --manages\n")
+            return 1
+        try:
+            payload = read_payload(sys.stdin)
+        except Bad as exc:
+            sys.stderr.write("jsonc-edit: %s\n" % exc)
+            return 1
+
     try:
         text = _safe.read_capped(path, MAX_CONFIG_BYTES, follow=True).decode("utf-8")
     except FileNotFoundError:
@@ -362,34 +407,28 @@ def main(argv):
         sys.stderr.write("jsonc-edit: %s\n" % exc)
         return 1
 
+    # ValueError is a string literal json itself will not decode, and RecursionError
+    # a file nested deeper than the scanner recurses. Neither is a reason for a
+    # traceback, and neither message is passed on: both carry the text.
     try:
         doc, root = parse(text)
     except Bad as exc:
         sys.stderr.write("jsonc-edit: %s: %s\n" % (path, exc))
+        return 1
+    except (ValueError, RecursionError):
+        sys.stderr.write("jsonc-edit: %s: not readable JSONC, or nested too deeply\n" % path)
         return 1
     if not isinstance(doc, dict):
         sys.stderr.write("jsonc-edit: %s is not a JSON object\n" % path)
         return 1
 
     if mode == "read":
-        sys.stdout.write(json.dumps(descend(doc, scope) or {}, ensure_ascii=False))
+        emit(json.dumps(descend(doc, scope) or {}, ensure_ascii=False))
         return 0
-
-    if mode != "apply":
-        sys.stderr.write("jsonc-edit: unknown mode %s\n" % mode)
-        return 1
-    if manages is None:
-        sys.stderr.write("jsonc-edit: apply needs --manages\n")
-        return 1
-    try:
-        payload = read_payload(sys.stdin)
-    except Bad as exc:
-        sys.stderr.write("jsonc-edit: %s\n" % exc)
-        return 1
 
     updates = {k: (payload[k] if k in payload else DELETE) for k in manages}
     if not updates:
-        sys.stdout.write(text)
+        emit(text)
         return 0
 
     unit = detect_indent(text)
@@ -410,16 +449,24 @@ def main(argv):
                         nested[k] = v
                 for k in scope[depth + 1:][::-1]:
                     nested = {k: nested}
-                sys.stdout.write(splice(text, node, {key: nested}, unit))
+                emit(splice(text, node, {key: nested}, unit))
                 return 0
             node = member["value"]
             container = container[key]
-        sys.stdout.write(splice(text, node, updates, unit))
+        emit(splice(text, node, updates, unit))
         return 0
 
-    sys.stdout.write(splice(text, root, updates, unit))
+    emit(splice(text, root, updates, unit))
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        # Whoever was reading the result has gone, so there is nobody to tell, and
+        # the write over a config that depended on it has already failed upstream.
+        # Python flushes stdout again on the way out; pointing it at /dev/null first
+        # keeps that second failure from printing a traceback of its own.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)

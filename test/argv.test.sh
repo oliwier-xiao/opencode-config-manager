@@ -46,12 +46,17 @@ CANARIES=("$K_PROVIDER" "$K_MCP" "$K_AUTH" "$K_HOME" "$K_OMO" "$K_AGENT" "$K_PRO
 
 SHIMS="$ROOT/shims"; mkdir -p "$SHIMS"
 LOG="$ROOT/argv.log"; : > "$LOG"
+ENVLOG="$ROOT/env.log"; : > "$ENVLOG"
 cat > "$SHIMS/.shim" <<'SHIM'
 #!/bin/bash
 # Records this command's argv, then becomes the real command. printf is a builtin,
 # so recording the arguments does not put them on another command line.
 name="${0##*/}"
 { printf '%s\037' "$name" "$@"; printf '\n'; } >> "$ARGV_LOG"
+# And which commands were handed the panel's profile in their environment.
+if [ -n "${ARGV_ENVLOG:-}" ] && [ -n "${OC_PROFILE_JSON+x}${OC_PREFS_JSON+x}" ]; then
+  printf '%s\n' "$name" >> "$ARGV_ENVLOG"
+fi
 IFS=: read -ra dirs <<< "$PATH"
 for d in "${dirs[@]}"; do
   [ "$d" = "$ARGV_SHIMS" ] && continue
@@ -114,7 +119,8 @@ J
 run(){ local d="$1"; shift
   HOME="$d/home" OPENCODE_CONFIG_DIR="$d/cfg" OMO_CONFIG_HOME="$d/omo" \
   XDG_CACHE_HOME="$d/cache" XDG_STATE_HOME="$d/state" XDG_DATA_HOME="$d/data" \
-  OC_AUTO_RELOAD=0 ARGV_LOG="$LOG" ARGV_SHIMS="$SHIMS" PATH="$SHIMS:$PATH" "$OC" "$@"; }
+  OC_AUTO_RELOAD=0 ARGV_LOG="$LOG" ARGV_ENVLOG="$ENVLOG" ARGV_SHIMS="$SHIMS" PATH="$SHIMS:$PATH" \
+  "$OC" "$@"; }
 
 # One profile carrying a secret-shaped value inside a managed key, and one whose
 # model field holds a pasted key — the value E_MODEL_SYNTAX quotes back.
@@ -190,6 +196,20 @@ grep -qF "a comment the repairs have to keep" "$D/omo/omo.jsonc" \
 grep -q $'jsonc-edit\037apply' "$LOG" && ok "jsonc-edit apply was recorded" \
   || no "jsonc-edit apply was recorded" "no record of it — the shims missed the write path"
 grep -q $'^jq\037' "$LOG" && ok "jq was recorded" || no "jq was recorded" "no record of it"
+
+# The panel hands a profile over in the environment, which only this account can
+# read. Once read it is unset, so the only commands that may see it are the ones that
+# start oc-profiles itself: the shell its shebang names, and the timebox it re-runs
+# itself under. Through 1.5.1 every jq, python3 and flock it started had it too.
+echo "=== the environment hand-off stops at oc-profiles ==="
+seen="$(sort -u "$ENVLOG" | tr '\n' ' ')"
+case " $seen " in
+  *" bash "*) ok "the hand-off reached oc-profiles" ;;
+  *) no "the hand-off reached oc-profiles" "seen by: ${seen:-nothing}" ;;
+esac
+others="$(sort -u "$ENVLOG" | grep -vx -e bash -e timeout | tr '\n' ' ')"
+[ -z "$others" ] && ok "and nothing oc-profiles started inherited it" \
+  || no "and nothing oc-profiles started inherited it" "also handed to: $others"
 
 echo "=== no command line carried a secret ==="
 for c in "${CANARIES[@]}"; do

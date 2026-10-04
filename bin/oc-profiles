@@ -22,6 +22,15 @@ if [ "${OC_TIMEBOXED:-0}" != 1 ] && command -v timeout >/dev/null 2>&1; then
   exec timeout -k 2 30 "$0" "$@"
 fi
 
+# The panel hands `save` and `prefs` their JSON in the environment, which only this
+# account can read. It is taken into plain shell variables here, before anything is
+# started, and unset: an exported variable is handed to every process started after
+# it — every jq, every helper — and none of them has any use for it. The timebox
+# above is the one process that has to carry it, to bring it back here.
+OC_PROFILE_IN="${OC_PROFILE_JSON-}"
+OC_PREFS_IN="${OC_PREFS_JSON-}"
+unset OC_PROFILE_JSON OC_PREFS_JSON
+
 # Everything this creates is this user's alone. The copies a backup keeps carry the
 # config's provider keys and MCP tokens, and the folder that kept the config private
 # does not come with them — so nothing here relies on the umask it was started
@@ -1653,15 +1662,15 @@ cmd_seed() {
 
 # ---------------------------------------------------------------- store edits
 
-# The panel hands a whole profile object in on stdin. Passing it as an argument
-# would put a config through argv and into every process listing on the box.
+# The panel hands a whole profile object over in the environment, and a terminal pipes
+# one in on stdin. Never as an argument: every account on the machine can read a
+# process's argv through /proc, and its environment only this one.
 cmd_save() {
   ensure_state
   take_lock
   local incoming
-  # Quickshell's Process has no way to write to a child's stdin, so the panel hands the
-  # profile over in the environment; a terminal still pipes. Neither route uses argv.
-  if [ -n "${OC_PROFILE_JSON:-}" ]; then incoming="$OC_PROFILE_JSON"; else incoming=$(cat); fi
+  # Taken out of the environment at the top of this file; see there.
+  if [ -n "$OC_PROFILE_IN" ]; then incoming="$OC_PROFILE_IN"; else incoming=$(cat); fi
   printf '%s' "$incoming" | jq -e '.id and .name' >/dev/null 2>&1 \
     || refuse "E_BAD_PROFILE" "That profile has no id or no name."
 
@@ -1756,7 +1765,7 @@ cmd_prefs() {
   ensure_state
   take_lock
   local incoming
-  if [ -n "${OC_PREFS_JSON:-}" ]; then incoming="$OC_PREFS_JSON"; else incoming=$(cat); fi
+  if [ -n "$OC_PREFS_IN" ]; then incoming="$OC_PREFS_IN"; else incoming=$(cat); fi
   printf '%s' "$incoming" | jq -e 'type == "object"' >/dev/null 2>&1 \
     || refuse "E_BAD_PREFS" "Preferences must be an object."
 
