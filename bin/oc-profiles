@@ -2,6 +2,14 @@
 # oc-profiles — the only thing that writes an opencode config file; the panel only
 # reads. jq only ever assigns the keys named in `manages`, so providers, MCP servers,
 # plugin lists and API keys come out the other side byte-equal.
+#
+# Nothing read out of a config file or a profile is ever put on a command line. argv
+# is readable by every account on the machine through /proc/<pid>/cmdline, and a
+# config holds provider keys and MCP tokens. Contents travel on stdin, or to jq as a
+# pipe it reads like a file (`--slurpfile name <(printf '%s' "$value")`, then
+# `$name[0]`); only key names, ids, paths, fingerprints and counts are arguments.
+# test/argv.test.sh runs every command with planted secrets and fails on any argv
+# that carries one.
 # Exit codes: 0 ok. 1 usage. 2 refused, nothing written. 3 partial write, all restored.
 
 set -uo pipefail
@@ -24,7 +32,7 @@ OC_INHERITED_UMASK="$(umask)"
 umask 077
 as_caller() { ( umask "$OC_INHERITED_UMASK"; exec "$@" ); }
 
-VERSION="1.5.1"
+VERSION="1.5.2"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
@@ -112,14 +120,16 @@ OHMY_MODEL_KEYS='["models","provider","model","fallback_models"]'
 # Every temporary this script makes is registered here and removed on the way out,
 # including on the SIGTERM the timebox sends. cmd_detect's projections hold whole
 # config documents — provider keys and MCP bearer tokens among them — and a killed
-# run must not leave those sitting in /tmp.
-# By prefix, not by array: mktemp_tracked is called inside $( ), and a subshell's
-# appends never reach the parent — an array here would leave the trap cleaning
-# nothing while appearing to work.
+# run must not leave those sitting in the cache.
+# By prefix, not by array, and the prefix fixed here in the shell the traps run in.
+# mktemp_tracked is called inside $( ): an array it appended to, or a prefix it
+# assigned, would be set in that subshell and gone. Through 1.5.1 the prefix was
+# assigned there, so the trap held an empty one and cleaned nothing: whatever a
+# killed run had staged — copies of whole configs, of auth.json — stayed where it was.
 OC_RUN_TAG="$$-$(date +%s 2>/dev/null || echo 0)"
-OC_TEMP_PREFIX=""   # set by mktemp_tracked on first use
+OC_TEMP_PREFIX="$CACHE/.stage.$OC_RUN_TAG."
 cleanup_temps() {
-  [ -n "$OC_TEMP_PREFIX" ] && rm -f "$OC_TEMP_PREFIX"* 2>/dev/null
+  rm -f "$OC_TEMP_PREFIX"* 2>/dev/null
   return 0
 }
 # A switch is all of itself or none of it, and the timebox can end this process in
@@ -149,7 +159,6 @@ trap on_signal INT TERM HUP
 # $CACHE to be a private folder this user owns; without it there is no folder here,
 # mktemp fails, and the caller reads that as nothing to read.
 mktemp_tracked() {
-  OC_TEMP_PREFIX="$CACHE/.stage.$OC_RUN_TAG."
   mktemp "${OC_TEMP_PREFIX}XXXXXXXX" 2>/dev/null
 }
 
@@ -158,10 +167,13 @@ warn() { printf '%s\n' "$*" >&2; }
 
 # Every failure the panel can act on comes back as JSON on stdout, so the
 # difference between "refused" and "crashed" is never a guess.
+#
+# The message goes to jq on stdin: some of them quote a value out of the file —
+# E_MODEL_SYNTAX repeats the model string it refused, and a key pasted into a model
+# field by mistake is exactly the value that is not a provider/model id.
 refuse() {
   local code="$1"; shift
-  jq -cn --arg code "$code" --arg message "$*" \
-    '{ok:false, code:$code, message:$message}'
+  printf '%s' "$*" | jq -cRs --arg code "$code" '{ok:false, code:$code, message:.}'
   exit 2
 }
 
@@ -703,13 +715,23 @@ read_projected() {
 
 # The write half of the same projection: prints the whole new file on stdout, with
 # every comment and every key this tool does not manage left exactly as it was.
+#
+# The payload is cut down to the managed keys before it goes anywhere, and then goes
+# to jsonc-edit on stdin. A key outside `manages` was never going to be written, so
+# handing it over could only ever leak it; and through 1.5.1 the whole payload rode
+# on jsonc-edit's command line — for the E_BARE_AGENT_STRING repair that was the
+# entire opencode.json, provider keys and MCP tokens included, readable by every
+# account on the machine through /proc for as long as the splice took.
 write_projected() {
   local logical="$1" payload="$2" mkeys="$3" file scope k
   file="$(file_for "$logical")"
   scope="$(scope_for "$logical")"
-  local args=(apply "$file" --payload "$payload" --manages "$mkeys")
+  local args=(apply "$file" --manages "$mkeys")
   while IFS= read -r k; do [ -n "$k" ] && args+=(--scope "$k"); done < <(printf '%s' "$scope" | jq -r '.[]?')
-  "$JSONC" "${args[@]}"
+  printf '%s' "$payload" \
+    | jq -c --argjson m "$mkeys" \
+        '. as $in | reduce $m[] as $k ({}; if ($in|has($k)) then .[$k]=$in[$k] else . end)' \
+    | "$JSONC" "${args[@]}"
 }
 
 resolve_opencode() {
@@ -783,7 +805,7 @@ cmd_detect() {
   # Built without a pipeline: under `set -o pipefail` a pgrep that matches nothing fails
   # the whole pipe, the `||` fallback fires on top of jq's own `[]`, and detect emits `[][]`.
   local pids pid_list=""
-  for pid in $(pgrep -x opencode 2>/dev/null); do
+  for pid in $(own_opencode_pids); do
     pid_list="${pid_list:+$pid_list,}$pid"
   done
   pids="[$pid_list]"
@@ -1090,12 +1112,12 @@ clear_remembered_efforts() {
            --label "opencode's model state" 2>/dev/null)" || { printf '{}'; return 0; }
   printf '%s' "$src" | jq -e 'type == "object" and ((.variant // {}) | type == "object")' \
     >/dev/null 2>&1 || { printf '{}'; return 0; }
-  removed="$(printf '%s' "$src" | jq -c --argjson m "$models" \
-    '(.variant // {}) | with_entries(select(.key as $k | ($m | index($k)) != null))' 2>/dev/null)" \
+  removed="$(printf '%s' "$src" | jq -c --slurpfile m <(printf '%s' "$models") \
+    '$m[0] as $m | (.variant // {}) | with_entries(select(.key as $k | ($m | index($k)) != null))' 2>/dev/null)" \
     || { printf '{}'; return 0; }
   case "$removed" in ''|'{}') printf '{}'; return 0 ;; esac
-  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --argjson m "$models" \
-    'if has("variant") then .variant |= with_entries(select(.key as $k | ($m | index($k)) == null)) else . end')" \
+  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --slurpfile m <(printf '%s' "$models") \
+    '$m[0] as $m | if has("variant") then .variant |= with_entries(select(.key as $k | ($m | index($k)) == null)) else . end')" \
     2>/dev/null || { printf '{}'; return 0; }
   printf '%s' "$removed"
 }
@@ -1113,8 +1135,8 @@ restore_remembered_efforts() {
            --label "opencode's model state" 2>/dev/null)" || return 0
   printf '%s' "$src" | jq -e 'type == "object" and ((.variant // {}) | type == "object")' \
     >/dev/null 2>&1 || return 0
-  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --argjson c "$cleared" \
-    '.variant = ($c + (.variant // {}))')" 2>/dev/null || true
+  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --slurpfile c <(printf '%s' "$cleared") \
+    '.variant = ($c[0] + (.variant // {}))')" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------- apply
@@ -1228,7 +1250,7 @@ cmd_apply() {
   efforts_reset="$(clear_remembered_efforts "$(profile_models_json "$applied_targets")")"
   if [ "$efforts_reset" != '{}' ]; then
     "$SELF_DIR/safe-read" "$dir/meta.json" --max-bytes "$MAX_BACKUP_BYTES" 2>/dev/null \
-      | jq --argjson c "$efforts_reset" '.clearedEfforts = $c' 2>/dev/null \
+      | jq --slurpfile c <(printf '%s' "$efforts_reset") '.clearedEfforts = $c[0]' 2>/dev/null \
       | write_private "$dir/meta.json" 2>/dev/null || true
   fi
 
@@ -1461,11 +1483,18 @@ pid_identity() {
   printf '%s' "${line##*) }" | awk '{print $20}'
 }
 
+# This account's opencode processes and no one else's. pgrep matches every account's
+# by default, so the panel counted other people's sessions as running here, and a
+# reload walked their /proc entries and tried to signal them.
+own_opencode_pids() {
+  pgrep -x -u "$EUID" opencode 2>/dev/null
+}
+
 # pid:starttime, so the caller can tell the process it looked at from whatever holds
 # that pid by the time it acts.
 reloadable_pids() {
   local pid ident
-  for pid in $(pgrep -x opencode 2>/dev/null); do
+  for pid in $(own_opencode_pids); do
     catches_sigusr2 "$pid" || continue
     ident="$(pid_identity "$pid")" || continue
     [ -n "$ident" ] && printf '%s:%s\n' "$pid" "$ident"
@@ -1496,7 +1525,7 @@ cmd_reload() {
   pids=$(reloadable_pids)
   n=$(printf '%s' "$pids" | grep -c . 2>/dev/null || true)
   [ -n "$n" ] || n=0
-  total=$(pgrep -cx opencode 2>/dev/null || true)
+  total=$(pgrep -cx -u "$EUID" opencode 2>/dev/null || true)
   [ -n "$total" ] || total=0
   skipped=$((total - n))
 
@@ -1543,11 +1572,12 @@ cmd_capture() {
     # `manages` is the whole key list, not just the keys that happen to be set.
     # A snapshot has to be able to restore a key being *absent*, or coming back to
     # it leaves behind whatever the profile you were on had added.
-    targets=$(jq -cn --argjson acc "$targets" --arg l "$logical" --argjson p "$doc" \
+    targets=$(jq -cn --slurpfile acc <(printf '%s' "$targets") --arg l "$logical" \
+      --slurpfile p <(printf '%s' "$doc") \
       --argjson m "$(keys_for "$logical")" \
       --arg fp "$(fingerprint_logical "$logical")" \
       --arg shape "$([ "$logical" = ohmy ] && echo oh-my-openagent || echo opencode)" \
-      '$acc + [{file:$l, shape:$shape, manages:$m, fingerprint:$fp, payload:$p}]')
+      '$acc[0] + [{file:$l, shape:$shape, manages:$m, fingerprint:$fp, payload:$p[0]}]')
   done
 
   # An opencode.json holding only providers and MCP servers is a perfectly normal
@@ -1564,8 +1594,10 @@ cmd_capture() {
     else print substr($0, 1, 2)
   }' | tr '[:lower:]' '[:upper:]')
 
-  store_update --arg id "$id" --arg name "$name" --arg short "$short" --arg at "$(now_iso)" --argjson t "$targets" '
-      .profiles = ( (.profiles | map(select(.id != $id)))
+  store_update --arg id "$id" --arg name "$name" --arg short "$short" --arg at "$(now_iso)" \
+      --slurpfile t <(printf '%s' "$targets") '
+      $t[0] as $t
+    | .profiles = ( (.profiles | map(select(.id != $id)))
         + [{id:$id, name:$name, shortName:$short, description:"",
             createdAt:$at, updatedAt:$at, targets:$t}] )
   '
@@ -1643,14 +1675,15 @@ cmd_save() {
     mkeys=$(printf '%s' "$t" | jq -c --argjson d "$(keys_for "$logical")" '.manages // $d')
     mkeys=$(clamp_manages "$mkeys" "$(keys_for "$logical")")
     t=$(printf '%s' "$t" | jq -c --argjson m "$mkeys" '.manages = $m')
-    rebuilt=$(jq -cn --argjson acc "$rebuilt" --argjson t "$t" \
+    rebuilt=$(jq -cn --slurpfile acc <(printf '%s' "$rebuilt") --slurpfile t <(printf '%s' "$t") \
       --arg fp "$(payload_fingerprint "$payload" "$(keys_for "$logical")")" \
-      '$acc + [ $t + {fingerprint: $fp} ]')
+      '$acc[0] + [ $t[0] + {fingerprint: $fp} ]')
   done <<< "$(printf '%s' "$incoming" | jq -c '.targets[]?')"
-  incoming=$(printf '%s' "$incoming" | jq -c --argjson t "$rebuilt" '.targets = $t')
+  incoming=$(printf '%s' "$incoming" | jq -c --slurpfile t <(printf '%s' "$rebuilt") '.targets = $t[0]')
 
-  store_update --argjson p "$incoming" --arg at "$(now_iso)" '
-      .profiles = ( (.profiles | map(select(.id != $p.id)))
+  store_update --slurpfile p <(printf '%s' "$incoming") --arg at "$(now_iso)" '
+      $p[0] as $p
+    | .profiles = ( (.profiles | map(select(.id != $p.id)))
         + [ $p + {updatedAt:$at, createdAt:( $p.createdAt // $at )} ] )
   '
 
@@ -1727,11 +1760,12 @@ cmd_prefs() {
   printf '%s' "$incoming" | jq -e 'type == "object"' >/dev/null 2>&1 \
     || refuse "E_BAD_PREFS" "Preferences must be an object."
 
-  store_update --argjson p "$incoming" '
+  store_update --slurpfile p <(printf '%s' "$incoming") '
+      $p[0] as $p
       # Deduped without unique_by, which sorts. The order here is "most recently
       # starred first", and sorting it alphabetically throws away the only thing
       # that makes the top of the list worth having.
-      .favorites = (($p.favorites // .favorites // []) | map(select(type == "string"))
+    | .favorites = (($p.favorites // .favorites // []) | map(select(type == "string"))
                     | reduce .[] as $x ([]; if index([$x]) == null then . + [$x] else . end))
     | .recents   = (($p.recents   // .recents   // []) | map(select(type == "string")) | .[0:8])
   '
@@ -1748,7 +1782,7 @@ cmd_backups() {
     [ "$n" -lt "$OC_BACKUPS_KEEP" ] || break
     meta_f="$(read_capped "$d/meta.json" "$MAX_BACKUP_BYTES" "a backup manifest")" || continue
     if jq -e . "$meta_f" >/dev/null 2>&1; then
-      out=$(jq -cn --argjson acc "$out" --slurpfile m "$meta_f" '$acc + [$m[0]]')
+      out=$(jq -cn --slurpfile acc <(printf '%s' "$out") --slurpfile m "$meta_f" '$acc[0] + [$m[0]]')
       n=$((n + 1))
     fi
     rm -f "$meta_f"
@@ -1969,8 +2003,9 @@ cmd_doctor() {
 # it, at the end they come out of rather than once the shell has already buffered
 # them. `omitted` says how many rows are not in the list.
 emit_dry_run() {
-  jq -cn --argjson d "$1" --argjson max "$MAX_DIFF_ROWS" '
-      ($d | length) as $n
+  jq -cn --slurpfile d <(printf '%s' "$1") --argjson max "$MAX_DIFF_ROWS" '
+      $d[0] as $d
+    | ($d | length) as $n
     | { ok: true, dryRun: true,
         diff: (if $n > $max then $d[0:$max] else $d end),
         omitted: (if $n > $max then $n - $max else 0 end) }' | head -c "$MAX_EMIT_BYTES"
@@ -2086,11 +2121,12 @@ repair_models() {
       '.targets[$ti].payload[$k][$n]')"
     after="$(printf '%s' "$before" | jq -c "$MODELS_TO_FALLBACKS models_to_fallbacks")"
     new_profile="$(printf '%s' "$new_profile" | jq -c \
-      --argjson ti "$ti" --arg k "$kind" --arg n "$name" --argjson a "$after" \
-      '.targets[$ti].payload[$k][$n] = $a')"
-    diff="$(jq -cn --argjson d "$diff" --arg p "$id" \
-      --arg k "$kind" --arg n "$name" --argjson b "$before" --argjson a "$after" \
-      '$d + [{profile:$p, target:"ohmy", key:($k + "." + $n), before:$b, after:$a}]')"
+      --argjson ti "$ti" --arg k "$kind" --arg n "$name" --slurpfile a <(printf '%s' "$after") \
+      '.targets[$ti].payload[$k][$n] = $a[0]')"
+    diff="$(jq -cn --slurpfile d <(printf '%s' "$diff") --arg p "$id" \
+      --arg k "$kind" --arg n "$name" \
+      --slurpfile b <(printf '%s' "$before") --slurpfile a <(printf '%s' "$after") \
+      '$d[0] + [{profile:$p, target:"ohmy", key:($k + "." + $n), before:$b[0], after:$a[0]}]')"
     fixed=$((fixed + 1))
     tis="$(jq -cn --argjson t "$tis" --argjson i "$ti" \
       '$t + [$i] | unique')"
@@ -2135,8 +2171,9 @@ repair_models() {
     | write_private "$dir/meta.json" 2>/dev/null \
     || refuse "E_PERM" "Cannot write the backup manifest."
 
-  store_update --argjson p "$new_profile" --arg at "$(now_iso)" '
-      .profiles = (.profiles | map(select(.id != $p.id)) + [$p + {updatedAt:$at}])'
+  store_update --slurpfile p <(printf '%s' "$new_profile") --arg at "$(now_iso)" '
+      $p[0] as $p
+    | .profiles = (.profiles | map(select(.id != $p.id)) + [$p + {updatedAt:$at}])'
 
   prune_backups
   warn "repair: profile store backup $stamp"
@@ -2174,9 +2211,9 @@ repair_models_config() {
       [ -n "$k" ] || continue
       before="$(printf '%s' "$doc" | jq -c --arg k "$k" '.agents[$k]')"
       after="$(printf '%s' "$payload" | jq -c --arg k "$k" '.agents[$k]')"
-      diff="$(jq -cn --argjson d "$diff" --arg f "$file" --arg k "$k" \
-        --argjson b "$before" --argjson a "$after" \
-        '$d + [{file:$f, target:"ohmy", key:("agents." + $k), before:$b, after:$a}]')"
+      diff="$(jq -cn --slurpfile d <(printf '%s' "$diff") --arg f "$file" --arg k "$k" \
+        --slurpfile b <(printf '%s' "$before") --slurpfile a <(printf '%s' "$after") \
+        '$d[0] + [{file:$f, target:"ohmy", key:("agents." + $k), before:$b[0], after:$a[0]}]')"
       fixed=$((fixed + 1))
     done <<< "$keys"
   else
@@ -2271,9 +2308,9 @@ repair_bare() {
       [ -n "$k" ] || continue
       before="$(printf '%s' "$doc" | jq -c --arg k "$k" '.agent[$k]')"
       after="$(printf '%s' "$payload" | jq -c --arg k "$k" '.agent[$k]')"
-      diff="$(jq -cn --argjson d "$diff" --arg f "$file" --arg k "$k" \
-        --argjson b "$before" --argjson a "$after" \
-        '$d + [{file:$f, target:"opencode", key:("agent." + $k), before:$b, after:$a}]')"
+      diff="$(jq -cn --slurpfile d <(printf '%s' "$diff") --arg f "$file" --arg k "$k" \
+        --slurpfile b <(printf '%s' "$before") --slurpfile a <(printf '%s' "$after") \
+        '$d[0] + [{file:$f, target:"opencode", key:("agent." + $k), before:$b[0], after:$a[0]}]')"
       fixed=$((fixed + 1))
     done <<< "$keys"
   else
@@ -2289,8 +2326,14 @@ repair_bare() {
     "\"$weird\" is not a model string or an object; fix it by hand."
   [ "$fixed" -gt 0 ] || { jq -cn '{ok:true, fixed:0}'; return 0; }
 
-  local mkeys stamp dir
-  mkeys="$(keys_for opencode)"
+  # Only `agent` is written back, so only `agent` is carried from here on. The
+  # payload used to be the whole document — `provider` with its API keys, `mcp`
+  # with its tokens — and it was preflighted whole as well, so a `model` field
+  # anywhere in a provider definition could refuse a repair that never touches it.
+  # `model` and `small_model` stay out of `manages` for the same reason: an apply
+  # deletes a managed key its payload omits.
+  local mkeys='["agent"]' stamp dir
+  payload="$(printf '%s' "$payload" | jq -c '{agent}')"
   preflight opencode "$payload" "$file"
 
   stamp="$(new_backup_stamp)"
@@ -2357,8 +2400,8 @@ repair_fallback() {
   before="$(printf '%s' "$doc" | jq -c '.fallback_models // empty' 2>/dev/null)"
   local diff='[]'
   if [ -n "$before" ]; then
-    diff="$(jq -cn --arg f "$file" --argjson b "$before" \
-      '[{file:$f, target:"ohmy", key:"fallback_models", before:$b, after:null}]')"
+    diff="$(printf '%s' "$doc" | jq -c --arg f "$file" \
+      '[{file:$f, target:"ohmy", key:"fallback_models", before:.fallback_models, after:null}]')"
   fi
 
   if [ "$apply" != 1 ]; then
@@ -2370,7 +2413,7 @@ repair_fallback() {
 
   preflight ohmy '{}' "$file"
 
-  local stamp dir k
+  local stamp dir
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
   make_backup_dir "$dir" || refuse "E_PERM" "Cannot create a backup directory."
@@ -2382,9 +2425,9 @@ repair_fallback() {
     || refuse "E_PERM" "Cannot write the backup manifest."
 
   OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
-  local args=(apply "$file" --payload '{}' --manages '["fallback_models"]')
-  while IFS= read -r k; do [ -n "$k" ] && args+=(--scope "$k"); done < <(printf '%s' "$scope" | jq -r '.[]?')
-  if ! "$JSONC" "${args[@]}" | atomic_write "$file"; then
+  # An empty payload over a managed key deletes it — through the same projected
+  # write as everything else, rather than a second copy of how one is spelled.
+  if ! write_projected ohmy '{}' '["fallback_models"]' | atomic_write "$file"; then
     "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
       --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
     OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()

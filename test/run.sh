@@ -15,6 +15,7 @@ done
 rc=0
 for suite in "bash $REPO/test/safe-read.test.sh" \
              "bash $REPO/test/hardening.test.sh" \
+             "bash $REPO/test/argv.test.sh" \
              "bash $REPO/test/private.test.sh" \
              "node $REPO/test/model.test.js" \
              "python3 $REPO/test/jsonc.test.py" \

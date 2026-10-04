@@ -52,9 +52,13 @@ open with `O_NOFOLLOW` and `O_NONBLOCK`, the type, owner and size judged on that
 descriptor rather than on the name, and only the bytes that were vouched for read back
 through it. Every file it writes goes through `bin/safe-write`: an `O_EXCL`,
 `O_NOFOLLOW`, mode 0600 temporary in the destination's own directory, fsync, rename,
-and an fsync of the directory. Everything it keeps — profiles, backups, the model cache —
-sits in folders `bin/private-dir` has shown to be private: created 0700, opened without
-following a link, owned by you, group and other bits cleared on that descriptor; the
+and an fsync of the directory. Nothing it reads out of a config goes on a command line:
+every account on the machine can read a process's arguments through `/proc`, so a
+config's contents reach the helpers on stdin or through a pipe, and `test/argv.test.sh`
+fails if any command it starts carries a planted key. Everything it keeps — profiles,
+backups, the model cache — sits in folders `bin/private-dir` has shown to be private:
+created 0700, opened without following a link, owned by you, group and other bits
+cleared on that descriptor; the
 copies inside are 0600, and the scripts run under `umask 077`. A backup holds whatever
 your config holds, so it does not inherit the config's own mode: a 0644 config kept
 private by its 0700 folder would otherwise become a readable copy somewhere else.

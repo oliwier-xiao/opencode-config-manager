@@ -1,5 +1,66 @@
 # Changelog
 
+## 1.5.2
+
+Nothing read out of a config goes on a command line.
+
+### Fixed
+
+- **The E_BARE_AGENT_STRING repair no longer hands your whole `opencode.json` to another
+  process's argv.** It built its payload from the entire document and passed it to
+  `jsonc-edit` as `--payload <json>`. Every account on the machine can read every process's
+  arguments through `/proc/<pid>/cmdline`, so for as long as the splice ran, the provider
+  API keys and MCP tokens in that file were readable by any other local user
+  (CWE-214). Now:
+  - `jsonc-edit apply` reads its payload on stdin, capped at the same 4 MiB as a config,
+    and must get one JSON object. `--payload` is refused, so a caller still passing it
+    fails every time instead of leaking. A terminal on stdin is refused rather than
+    waited on.
+  - `write_projected` cuts the payload down to the managed keys before handing it over, so
+    a key that was never going to be written is never passed either.
+  - The repair carries only `agent`, and manages only `agent`. It used to preflight the
+    whole document too, so a `model` field inside a provider definition could refuse a
+    repair that never touches providers.
+- **No profile or agent content goes on jq's command line either.** `capture`, `save`,
+  `prefs`, the four repairs and their dry runs, the remembered-effort bookkeeping and
+  `backups` passed profile payloads, agent entries and before/after diffs to jq as
+  `--argjson`. They now go as a pipe jq reads like a file (`--slurpfile`), and only key
+  names, ids, paths, fingerprints and counts are arguments. This also lifts a limit: one
+  argument cannot be longer than 128 KiB, so capturing a config whose managed keys came
+  to more than that failed, with an `E_STORE` refusal that blamed the profile store.
+- **A refusal's message goes to jq on stdin.** `E_MODEL_SYNTAX` quotes the model string it
+  refused, and a key pasted into a model field by mistake is exactly the string that is
+  not a provider/model id.
+- **A killed run cleans up after itself, as the comments always said it did.** The temp
+  prefix the exit and signal traps remove was assigned inside `$( )`, so the traps held
+  an empty one and removed nothing. A run stopped by the 30-second timebox left its
+  staged copies of config documents, provider keys and MCP tokens included, in the cache
+  folder. The folder is private, but the copies were not meant to outlive the run. The
+  prefix is now fixed where the traps can see it, and `hardening.test.sh` checks that a
+  killed run leaves nothing.
+- **Only your own opencode sessions are counted or signalled.** `pgrep -x opencode`
+  matched every account's processes, so on a shared machine the panel counted other
+  people's sessions as running here, and a reload walked their `/proc` entries and tried
+  to signal them.
+
+### Tests
+
+- `test/argv.test.sh` (48 checks where `strace` can trace, 38 where it cannot). It plants
+  a different secret in each place one lives: a provider key, an MCP header, `auth.json`,
+  `~/.opencode`, an oh-my-openagent key, an agent prompt, a profile payload, and a key
+  pasted into a model field. Then it runs every verb, including all four repairs (dry and
+  applied), apply, revert, save from the environment and from stdin, and a refusal. It
+  records the argv of every command started, through logging shims at the front of `PATH`,
+  and through `strace` when that is installed and allowed. Any planted secret in any argv
+  fails it. The recorder is shown to catch a secret passed as an argument, and the run is
+  shown to have reached `jsonc-edit apply`, so the suite cannot pass by recording nothing.
+  Against 1.5.1 it fails on exactly the line the marketplace review named.
+- `test/jsonc.test.py`: the payload goes in on stdin. `--payload` in both spellings is
+  refused, as are an empty, malformed or non-object payload and a terminal. A payload at
+  the cap lands whole, and one byte more is refused.
+- `test/detect.test.sh` skips the opencode roster check when opencode is not installed, as
+  `upstream.test.sh` already did.
+
 ## 1.5.1
 
 Backups keep the privacy of the folder the config came from.

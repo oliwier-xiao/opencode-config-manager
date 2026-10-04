@@ -8,10 +8,17 @@ key's value occupies and replace only that span. Everything else in the file, do
 the whitespace, comes out the far side unchanged.
 
   jsonc-edit read  <file> [--scope KEY ...]
-  jsonc-edit apply <file> --payload <json> --manages <json> [--scope KEY ...]
+  jsonc-edit apply <file> --manages <json> [--scope KEY ...]   < payload
 
-`read` prints the scoped object as compact JSON. `apply` prints the whole new file on
-stdout; the caller decides how it lands on disk.
+`read` prints the scoped object as compact JSON. `apply` reads the payload, one JSON
+object, on stdin and prints the whole new file on stdout; the caller decides how it
+lands on disk.
+
+The payload is config content: a projection of a file that also holds provider API
+keys and MCP tokens. A command line is readable by every account on the machine
+through /proc/<pid>/cmdline, so the payload is never taken from one — `--payload` is
+refused, not ignored, so a caller still passing it fails instead of leaking. Only key
+names, the scope and the path travel as arguments.
 """
 import importlib.machinery
 import importlib.util
@@ -28,6 +35,8 @@ WS = " \t\r\n"
 # or a device planted at the path is refused rather than stalling this process
 # inside open(2).
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
+# A payload is at most a projection of a config, so the same ceiling bounds it.
+MAX_PAYLOAD_BYTES = MAX_CONFIG_BYTES
 
 
 # No .pyc beside the script: this directory is the installed plugin, and a
@@ -281,21 +290,62 @@ def descend(value, scope):
     return value if isinstance(value, dict) else None
 
 
+def read_payload(stream):
+    """The payload off stdin: bounded, UTF-8, and one JSON object or nothing.
+
+    One byte past the cap is asked for, so a payload exactly at it is accepted and
+    anything longer is refused rather than parsed short. A terminal is refused
+    instead of waited on: a person running this by hand gets told where the
+    payload goes, not a prompt-less hang.
+    """
+    if stream is None or stream.closed:
+        raise Bad("apply reads the payload on stdin, and there is no stdin")
+    if stream.isatty():
+        raise Bad("apply reads the payload on stdin; pipe it in")
+    raw = stream.buffer.read(MAX_PAYLOAD_BYTES + 1)
+    if len(raw) > MAX_PAYLOAD_BYTES:
+        raise Bad("the payload is larger than %d bytes" % MAX_PAYLOAD_BYTES)
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, ValueError):
+        raise Bad("the payload on stdin is not JSON")
+    if not isinstance(payload, dict):
+        raise Bad("the payload on stdin is not a JSON object")
+    return payload
+
+
 def main(argv):
     if len(argv) < 3:
         sys.stderr.write(__doc__)
         return 1
     mode, path = argv[1], argv[2]
-    scope, payload, manages = [], None, None
+    scope, manages = [], None
     i = 3
     while i < len(argv):
         a = argv[i]
+        if a in ("--scope", "--manages") and i + 1 >= len(argv):
+            sys.stderr.write("jsonc-edit: %s needs a value\n" % a)
+            return 1
         if a == "--scope":
             scope.append(argv[i + 1]); i += 2
-        elif a == "--payload":
-            payload = json.loads(argv[i + 1]); i += 2
         elif a == "--manages":
-            manages = json.loads(argv[i + 1]); i += 2
+            try:
+                manages = json.loads(argv[i + 1])
+            except ValueError:
+                manages = None
+            if not (isinstance(manages, list) and all(isinstance(k, str) for k in manages)):
+                sys.stderr.write("jsonc-edit: --manages must be a JSON array of key names\n")
+                return 1
+            i += 2
+        elif a == "--payload" or a.startswith("--payload="):
+            # Refused before its value is so much as looked at. By the time this
+            # runs the value has already been on the command line, so the refusal
+            # cannot undo that; it can make sure the caller that did it fails loudly
+            # every time, which is how it gets found and fixed.
+            sys.stderr.write("jsonc-edit: --payload is not accepted; the command line is "
+                             "readable by every account through /proc. Pipe the payload "
+                             "on stdin.\n")
+            return 1
         else:
             sys.stderr.write("jsonc-edit: unknown option %s\n" % a)
             return 1
@@ -328,8 +378,13 @@ def main(argv):
     if mode != "apply":
         sys.stderr.write("jsonc-edit: unknown mode %s\n" % mode)
         return 1
-    if payload is None or manages is None:
-        sys.stderr.write("jsonc-edit: apply needs --payload and --manages\n")
+    if manages is None:
+        sys.stderr.write("jsonc-edit: apply needs --manages\n")
+        return 1
+    try:
+        payload = read_payload(sys.stdin)
+    except Bad as exc:
+        sys.stderr.write("jsonc-edit: %s\n" % exc)
         return 1
 
     updates = {k: (payload[k] if k in payload else DELETE) for k in manages}

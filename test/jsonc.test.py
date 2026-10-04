@@ -4,8 +4,8 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 JE = str(REPO / "bin" / "jsonc-edit")
 passed = failed = 0
 
-def run(args):
-    r = subprocess.run([JE] + args, capture_output=True, text=True)
+def run(args, stdin=None):
+    r = subprocess.run([JE] + args, input=stdin, capture_output=True, text=True, timeout=30)
     if r.returncode != 0:
         raise AssertionError("exit %d: %s" % (r.returncode, r.stderr.strip()))
     return r.stdout
@@ -38,11 +38,13 @@ SRC = '''// banner comment
 }
 '''
 
+# The payload goes in on stdin, the way bin/oc-profiles hands it over: never as an
+# argument, because a command line is readable by every account through /proc.
 def apply(text, payload, manages, scope=("[opencode]",)):
     p = tmp(text)
-    args = ["apply", p, "--payload", json.dumps(payload), "--manages", json.dumps(manages)]
+    args = ["apply", p, "--manages", json.dumps(manages)]
     for s in scope: args += ["--scope", s]
-    out = run(args); os.unlink(p); return out
+    out = run(args, stdin=json.dumps(payload)); os.unlink(p); return out
 
 def readback(text, scope=("[opencode]",)):
     p = tmp(text)
@@ -117,6 +119,69 @@ t("a tab-indented file stays tab-indented", lambda: (
     lambda out: (_ for _ in ()).throw(AssertionError(repr(out)))
       if "\n    " in out else None
 )(apply(TABS, {"agents": {"a": "x/y"}, "categories": {"deep": {"model": "x/z"}}}, ["agents","categories"])))
+
+print("\n--- the payload never travels on the command line ---")
+def refused(args, stdin=None, stdin_fd=None, want=""):
+    kw = {"stdin": stdin_fd} if stdin_fd is not None else {"input": stdin}
+    r = subprocess.run([JE] + args, capture_output=True, text=True, timeout=30, **kw)
+    assert r.returncode == 1, "exit %d, wanted 1 (stderr: %s)" % (r.returncode, r.stderr.strip())
+    assert r.stdout == "", "printed a file it should have refused to write: %r" % r.stdout[:200]
+    assert want in r.stderr, "stderr %r does not say %r" % (r.stderr.strip(), want)
+
+def payload_flag_refused():
+    p = tmp(PLAIN)
+    try:
+        refused(["apply", p, "--payload", '{"model":"a/b"}', "--manages", '["model"]'],
+                stdin='{"model":"a/b"}', want="Pipe the payload on stdin")
+        refused(["apply", p, '--payload={"model":"a/b"}', "--manages", '["model"]'],
+                stdin='{"model":"a/b"}', want="Pipe the payload on stdin")
+    finally:
+        os.unlink(p)
+t("--payload is refused, in both spellings", payload_flag_refused)
+
+def bad_payloads():
+    p = tmp(PLAIN)
+    try:
+        refused(["apply", p, "--manages", '["model"]'], stdin="", want="not JSON")
+        refused(["apply", p, "--manages", '["model"]'], stdin="[1, 2]", want="not a JSON object")
+        refused(["apply", p, "--manages", '["model"]'], stdin="{nope", want="not JSON")
+        refused(["apply", p, "--manages", '"model"'], stdin="{}", want="array of key names")
+        refused(["apply", p, "--manages"], stdin="{}", want="needs a value")
+    finally:
+        os.unlink(p)
+t("an empty, non-object or malformed payload is refused", bad_payloads)
+
+def at_and_past_the_cap():
+    cap = 4 * 1024 * 1024
+    p = tmp(PLAIN)
+    try:
+        exact = '{"x":"' + "a" * (cap - 8) + '"}'
+        assert len(exact) == cap
+        out = run(["apply", p, "--manages", '["x"]'], stdin=exact)
+        assert len(json.loads(out)["x"]) == cap - 8, "the payload at the cap did not land whole"
+        refused(["apply", p, "--manages", '["x"]'], stdin=exact[:-1] + ' }', want="larger than")
+    finally:
+        os.unlink(p)
+t("a payload at the cap lands; one byte past it is refused", at_and_past_the_cap)
+
+def terminal_refused():
+    import pty
+    master, slave = pty.openpty()
+    p = tmp(PLAIN)
+    try:
+        refused(["apply", p, "--manages", '["model"]'], stdin_fd=slave, want="pipe it in")
+    finally:
+        os.close(master); os.close(slave); os.unlink(p)
+t("a terminal on stdin is refused, not waited on", terminal_refused)
+
+def read_ignores_stdin():
+    p = tmp(PLAIN)
+    try:
+        got = json.loads(run(["read", p], stdin='{"model":"z/z"}'))["model"]
+        assert got == "a/sonnet-5", "read took %r from stdin" % got
+    finally:
+        os.unlink(p)
+t("read takes nothing from stdin", read_ignores_stdin)
 
 print("\n" + (("FAILED %d / " % failed) if failed else "") + "%d passed" % passed)
 sys.exit(1 if failed else 0)
