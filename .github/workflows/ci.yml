@@ -1,0 +1,90 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+# A read-only token and no secrets: nothing in this workflow pushes, comments or
+# publishes. The marketplace's own workflows are written the same way.
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  suite:
+    name: syntax, manifest, test suite
+    # A named release rather than ubuntu-latest, so the runner changes when this file
+    # says so and not when the label moves to the next Ubuntu.
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        # Pinned by commit, as the marketplace's own workflows pin it, and without the
+        # token left behind in .git/config for a later step to find.
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          persist-credentials: false
+
+      - name: Tools the suite calls
+        # Nothing is installed here: jq, node, python3 and shellcheck are on the runner
+        # image, and flock and pgrep are Ubuntu base packages. Printing them makes a
+        # missing one the first line of the log rather than a puzzling failure later.
+        run: |
+          bash --version | head -1
+          jq --version
+          python3 --version
+          node --version
+          flock --version | head -1
+          pgrep --version | head -1
+          shellcheck --version | sed -n 2p
+
+      - name: Shell and Python syntax
+        # bash -n takes one script; every further word is that script's argument, so a
+        # list of files has to be a loop. The Python helpers have no .py suffix, and
+        # compile() leaves no __pycache__ behind in what is the installed plugin folder.
+        run: |
+          for f in bin/oc-profiles bin/read-catalog bin/sync-models.sh dev-sync.sh test/*.sh; do
+            bash -n "$f" || { echo "syntax error in $f"; exit 1; }
+          done
+          python3 -B - bin/jsonc-edit bin/safe-read bin/safe-write bin/private-dir test/jsonc.test.py <<'PY'
+          import sys
+          for path in sys.argv[1:]:
+              compile(open(path, "rb").read(), path, "exec")
+              print("ok  ", path)
+          PY
+
+      - name: Shellcheck
+        # Errors fail the run. Warnings are listed and do not: bin/oc-profiles carries a
+        # dozen of them that predate this file.
+        run: |
+          shellcheck -S error bin/oc-profiles bin/read-catalog bin/sync-models.sh dev-sync.sh test/*.sh
+          shellcheck -S warning bin/oc-profiles bin/read-catalog bin/sync-models.sh dev-sync.sh || true
+
+      - name: Manifest and its defaults
+        # Also part of test/run.sh; run on its own first so a manifest mistake is the
+        # first red line in the log rather than the last one.
+        run: bash test/manifest.test.sh
+
+      - name: Test suite
+        shell: bash
+        # Exits non-zero if any suite fails, or if a suite touched an opencode config. A
+        # suite skips itself, and says so, for what a runner lacks: oh-my-openagent,
+        # opencode, a Qt6 qml runtime, a model cache, strace. Nothing is disabled here.
+        # Keep this on the runner's own non-root user: under uid 0, safe-read.test.sh
+        # ("root-owned file refused") and hardening.test.sh ("the lock fails closed")
+        # fail by construction, because root owns /etc/passwd and ignores a 0300 folder.
+        run: bash test/run.sh | tee "$RUNNER_TEMP/suite.log"
+
+      - name: The suite ran, and did not skip itself away
+        # Skips exit 0 by design, so a runner that lost jq or python3 would otherwise
+        # report green for a suite that checked almost nothing. Over five hundred checks
+        # run on a bare runner; the floor is set well under that.
+        run: |
+          ok="$(grep -c '^  ok ' "$RUNNER_TEMP/suite.log" || true)"
+          echo "$ok checks passed"
+          test "$ok" -ge 300 || { echo "fewer than 300 checks ran: a suite is skipping what it should run"; exit 1; }

@@ -80,6 +80,20 @@ Nothing read out of a config goes on a command line.
   ends the run quietly.
 - `test/detect.test.sh` skips the opencode roster check when opencode is not installed, as
   `upstream.test.sh` already did.
+- `test/manifest.test.sh` (27 checks). Every setting in `barWidget.schema` has a default
+  in `barWidget.defaults` that agrees with it, the keys match in both directions, and an
+  enum default is one of its options while an integer one sits inside `min..max`. The
+  manifest also passes the marketplace's own field limits, id rules and closed set of
+  kinds. Every entry point exists, the newest CHANGELOG entry is the manifest's version,
+  the README's install, update and remove commands name this plugin, and nothing tracked is
+  a symlink. Each rule is also run on a copy of the manifest broken in exactly that one way,
+  and must fail there.
+- CI, in `.github/workflows/ci.yml`, the same as the sibling plugins have, on every push to
+  `main` and every pull request. It runs a syntax pass over every script, `shellcheck`
+  (errors fail the run), the manifest test and the whole suite, on Ubuntu 24.04 with a
+  read-only token and a checkout pinned by commit. The runner has neither opencode nor
+  oh-my-openagent, so the suites that need them skip and say so. A last step fails the
+  run if fewer than 300 checks ran, so a suite that skipped itself away cannot pass green.
 
 ## 1.5.1
 

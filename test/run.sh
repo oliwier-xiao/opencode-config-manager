@@ -13,7 +13,8 @@ for f in "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json" \
 done
 
 rc=0
-for suite in "bash $REPO/test/safe-read.test.sh" \
+for suite in "bash $REPO/test/manifest.test.sh" \
+             "bash $REPO/test/safe-read.test.sh" \
              "bash $REPO/test/hardening.test.sh" \
              "bash $REPO/test/argv.test.sh" \
              "bash $REPO/test/private.test.sh" \

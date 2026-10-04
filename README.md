@@ -341,8 +341,10 @@ it is signalled, and a server you are running is left alone.
 ./test/run.sh
 ```
 
-539 checks over the reader and writer, the model-cache sync, the hardening, the privacy of every folder and backup it keeps, the row model, the JSONC editor,
-shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
+More than five hundred checks over the manifest, the reader and writer, the model-cache sync, the
+hardening, the command lines it starts, the privacy of every folder and backup it keeps, the row
+model, the JSONC editor, shape detection, the write path, what `doctor` finds and `repair` puts
+right, and which profile counts as the running one.
 One suite points outward: `upstream.test.sh` asserts what this plugin assumes about the two
 programs it sits between, against the copies actually installed — schema location, agent and
 category rosters, the refused-field list, and the built-in fallback. It is the suite that goes red
@@ -352,6 +354,11 @@ suite touched the config you actually use. The oh-my-openagent halves skip thems
 a machine that does not have it installed, and so does the QML suite where there is no Qt6
 `qml` to run it — that one splices functions straight out of the `.qml` files and executes
 them in a real QML engine, because the writers being right says nothing about the call sites.
+
+The same suite runs on every push to `main` and every pull request, in
+`.github/workflows/ci.yml`, on an Ubuntu runner that has neither opencode nor oh-my-openagent:
+the halves that need them skip and say so, and the run fails if fewer checks ran than a bare
+runner should manage.
 
 `./dev-sync.sh` copies the working tree into `~/.config/omarchy/plugins/` and restarts the
 shell — a bar widget already mounted in a slot keeps its old instance otherwise, so a
