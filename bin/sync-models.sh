@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 #
 # sync-models.sh — joins `opencode models` (what you can reach right now) with
 # models.dev/api.json (name, context, price, reasoning efforts), marking each `reachable`.
@@ -65,7 +65,11 @@ MAX_REACH_BYTES="${MAX_REACH_BYTES:-1048576}"
 RUN_TAG="$$-$(date +%s 2>/dev/null || echo 0)"
 STAGE_PREFIX="$CACHE/.stage.$RUN_TAG."
 cleanup() { rm -f "$STAGE_PREFIX"* 2>/dev/null; return 0; }
-trap cleanup EXIT INT TERM HUP
+# A signal ends the run as well as cleaning up after it. Trapped on its own, TERM ran
+# the cleanup and then carried on — writing an empty reachable list out of the files
+# the cleanup had just removed, and reporting success.
+trap cleanup EXIT
+trap 'cleanup; exit 143' INT TERM HUP
 # A run killed outright runs no trap, and its staged files — up to MAX_FETCH_BYTES
 # of half-downloaded catalogue — are then nobody's to remove: every glob is scoped
 # to the run that made it. Anything left over an hour is from a run that is gone.
@@ -143,7 +147,9 @@ if command -v curl >/dev/null 2>&1; then
   # once the body it belongs to has been accepted.
   etag_new="$(stage)" || etag_new="$fetched.etag"
   if [ -n "$fetched" ]; then
-    code=$(curl -fsS --proto '=https' --max-time 20 --max-filesize "$MAX_FETCH_BYTES" \
+    # -q first: no ~/.curlrc. A line in it could add a proxy, a header or an output
+    # file to a request this script means to be exactly what it says.
+    code=$(curl -q -fsS --proto '=https' --max-time 20 --max-filesize "$MAX_FETCH_BYTES" \
             --retry 2 --retry-delay 1 \
             --etag-compare "$ETAG" --etag-save "$etag_new" \
             -o "$fetched" -w '%{http_code}' https://models.dev/api.json 2>/dev/null) || code=000
@@ -170,17 +176,29 @@ fi # downloads skipped on a reach-only run
 # old list meanwhile and re-reads the cache when this lands, so nothing here
 # ever sits between clicking the bar and seeing the list.
 # Failing here is not fatal: models then show as unreachable-unknown rather than none at all.
-OPENCODE_BIN="${OPENCODE_BIN:-}"
-if [ -z "$OPENCODE_BIN" ]; then
-  # PATH first. ~/.opencode is where the curl installer puts a copy, and that copy
-  # does not update itself — on a machine that later installed opencode from a
-  # package, preferring it built the model list from an older opencode than the one
-  # the user actually runs. bin/oc-profiles has always resolved this from PATH; now
-  # both halves of the plugin agree on which opencode is the authority.
-  for c in "$(command -v opencode 2>/dev/null)" "$HOME/.opencode/bin/opencode"; do
-    [ -n "$c" ] && [ -x "$c" ] && { OPENCODE_BIN="$c"; break; }
-  done
-fi
+# Found where it is installed, the same way bin/oc-profiles finds it: OPENCODE_BIN
+# when one is named, then PATH — which the panel sets to the system's own directories
+# — then the places opencode's installers put it. PATH before ~/.opencode, because the
+# copy the curl installer leaves there does not update itself, and a machine that
+# later installed opencode from a package should not have its model list built from
+# the older one. What is found has to be a regular file once its links are followed,
+# owned by root or by this user and writable by nobody else; anything else at one of
+# those names is passed over.
+OPENCODE_BIN_IN="${OPENCODE_BIN:-}"
+OPENCODE_BIN=""
+for c in "$OPENCODE_BIN_IN" "$(type -P opencode 2>/dev/null)" /usr/bin/opencode /usr/local/bin/opencode \
+         "$HOME/.opencode/bin/opencode" "$HOME/.local/bin/opencode" \
+         "$HOME/.bun/bin/opencode" "$HOME/.npm-global/bin/opencode"; do
+  case "$c" in /*) ;; *) continue ;; esac
+  real="$(readlink -f -- "$c" 2>/dev/null)" || continue
+  [ -f "$real" ] && [ -x "$real" ] || continue
+  owner="$(stat -c %u -- "$real" 2>/dev/null)" || continue
+  [ "$owner" = 0 ] || [ "$owner" = "$EUID" ] || continue
+  mode="$(stat -c %a -- "$real" 2>/dev/null)" || continue
+  (( (8#$mode & 8#022) == 0 )) || continue
+  OPENCODE_BIN="$real"
+  break
+done
 
 # Stamped before the probe, not after, and whether or not the probe works. This is
 # the clock REACH_TTL is read from, so a failure that left it untouched would be
@@ -192,7 +210,13 @@ if [ -n "$OPENCODE_BIN" ]; then
   # head -c first: a subprocess can print more than anyone expected, and the cheap
   # place to stop that is the pipe it comes out of, not the file it lands in.
   if printed="$(stage)" && reach="$(stage)"; then
-    as_caller timeout 30 "$OPENCODE_BIN" models 2>/dev/null | head -c "$MAX_REACH_BYTES" > "$printed"
+    # From HOME, with a search path of the system's directories behind its own: the
+    # folder this was started in is nobody's choice of project, and opencode reads the
+    # project config of the folder it starts in.
+    timeout_bin="$(type -P timeout 2>/dev/null)" || timeout_bin=timeout
+    ( cd "$HOME" 2>/dev/null || cd /
+      PATH="${OPENCODE_BIN%/*}:/usr/bin:/bin" as_caller "$timeout_bin" 30 "$OPENCODE_BIN" models ) \
+      2>/dev/null | head -c "$MAX_REACH_BYTES" > "$printed"
     # Judged on what it printed, never on how it exited. opencode returns non-zero
     # when any single configured provider has no credentials — the exact state of
     # someone half-way through adding one — and under `pipefail` that verdict would

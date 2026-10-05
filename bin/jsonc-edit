@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """Read and surgically edit a JSONC config, keeping every byte this tool does not own.
 
 oh-my-openagent's user config is ~/.omo/omo.jsonc — JSONC, with comments, and with
@@ -8,10 +8,17 @@ key's value occupies and replace only that span. Everything else in the file, do
 the whitespace, comes out the far side unchanged.
 
   jsonc-edit read  <file> [--scope KEY ...]
-  jsonc-edit apply <file> --payload <json> --manages <json> [--scope KEY ...]
+  jsonc-edit apply <file> --manages <json> [--scope KEY ...]   < payload
 
-`read` prints the scoped object as compact JSON. `apply` prints the whole new file on
-stdout; the caller decides how it lands on disk.
+`read` prints the scoped object as compact JSON. `apply` reads the payload, one JSON
+object, on stdin and prints the whole new file on stdout; the caller decides how it
+lands on disk.
+
+The payload is config content: a projection of a file that also holds provider API
+keys and MCP tokens. A command line is readable by every account on the machine
+through /proc/<pid>/cmdline, so the payload is never taken from one — `--payload` is
+refused, not ignored, so a caller still passing it fails instead of leaking. Only key
+names, the scope and the path travel as arguments.
 """
 import importlib.machinery
 import importlib.util
@@ -28,6 +35,8 @@ WS = " \t\r\n"
 # or a device planted at the path is refused rather than stalling this process
 # inside open(2).
 MAX_CONFIG_BYTES = 4 * 1024 * 1024
+# A payload is at most a projection of a config, so the same ceiling bounds it.
+MAX_PAYLOAD_BYTES = MAX_CONFIG_BYTES
 
 
 # No .pyc beside the script: this directory is the installed plugin, and a
@@ -51,6 +60,11 @@ _safe = _load_safe_read()
 
 class Bad(Exception):
     pass
+
+
+def _not_json(token):
+    # Python's json reads NaN, Infinity and -Infinity; JSON does not have them.
+    raise ValueError("not JSON")
 
 
 class Scanner:
@@ -113,9 +127,11 @@ class Scanner:
             self.i += 1
         raw = self.s[start:self.i]
         try:
-            v = json.loads(raw)
+            v = json.loads(raw, parse_constant=_not_json)
         except Exception:
-            raise Bad("cannot read %r at %d" % (raw, start))
+            # Located, never quoted: the token is a piece of a file that holds
+            # provider keys, and this message ends up wherever stderr does.
+            raise Bad("cannot read the value at %d" % start)
         return v, {"kind": "value", "start": start, "end": self.i}
 
     def obj(self):
@@ -136,12 +152,21 @@ class Scanner:
                 raise Bad("expected ':' at %d" % self.i)
             self.i += 1
             val, node = self.value()
-            member_end = self.i
             out[key] = val
-            members.append({"key": key, "start": member_start, "end": member_end, "value": node})
+            member = {"key": key, "start": member_start, "value": node, "comma": None}
+            members.append(member)
+            # A comma between members is required, not optional: a reader that
+            # shrugged off a missing one would call a broken file readable, and the
+            # check that runs before anything is written would wave it through. One
+            # after the last member is JSONC's own allowance, and is kept.
             self.skip()
             if self.i < len(self.s) and self.s[self.i] == ",":
+                member["comma"] = self.i
                 self.i += 1
+            elif self.i < len(self.s) and self.s[self.i] == "}":
+                pass
+            else:
+                raise Bad("expected ',' or '}' at %d" % self.i)
         return out, {"kind": "object", "start": start, "end": self.i, "members": members}
 
     def arr(self):
@@ -160,6 +185,10 @@ class Scanner:
             self.skip()
             if self.i < len(self.s) and self.s[self.i] == ",":
                 self.i += 1
+            elif self.i < len(self.s) and self.s[self.i] == "]":
+                pass
+            else:
+                raise Bad("expected ',' or ']' at %d" % self.i)
         return out, {"kind": "array", "start": start, "end": self.i, "members": []}
 
 
@@ -193,76 +222,179 @@ def line_indent(text, offset):
 
 
 def render(value, base, unit):
-    body = json.dumps(value, indent=len(unit) if unit != "\t" else 1, ensure_ascii=False)
+    # Split on "\n" alone. str.splitlines() also breaks at U+2028, U+2029, U+0085 and
+    # the other Unicode line boundaries, which json.dumps leaves raw inside a string
+    # when ensure_ascii is off — cutting a string literal in two and writing a config
+    # nothing can read.
+    # allow_nan=False: NaN and Infinity are not JSON, and nothing that reads the
+    # config would take them back.
+    body = json.dumps(value, indent=len(unit) if unit != "\t" else 1, ensure_ascii=False,
+                      allow_nan=False)
     if unit == "\t":
         body = "\n".join(
             (l.replace(" ", "\t", len(l) - len(l.lstrip(" "))) if l.startswith(" ") else l)
-            for l in body.splitlines()
+            for l in body.split("\n")
         )
-    lines = body.splitlines()
-    return ("\n" + base).join(lines)
+    return ("\n" + base).join(body.split("\n"))
 
 
-def splice(text, node, updates, unit):
-    """Apply {key: value|DELETE} to one object node. Returns the new text.
+def _rest_of_line(text, pos):
+    """Where the line holding `pos` ends, if nothing but blanks and a // comment
+    follow `pos` on it; None if something else does."""
+    i, n = pos, len(text)
+    while i < n and text[i] in " \t\r":
+        i += 1
+    if i < n and text.startswith("//", i):
+        while i < n and text[i] != "\n":
+            i += 1
+    if i >= n or text[i] == "\n":
+        return i
+    return None
 
-    Edits run back to front so an earlier offset is never invalidated by a later one.
+
+def _member_base(text, node, member, unit):
+    """The indentation a member written below `member` should carry."""
+    ls = text.rfind("\n", 0, member["start"]) + 1
+    if text[ls:member["start"]].strip(" \t") == "":
+        return text[ls:member["start"]]
+    # The member shares its line with the brace or another member: indent one
+    # step in from the line the object opens on.
+    return line_indent(text, node["start"]) + unit
+
+
+def delete_member(text, node, key):
+    """The text without `key`'s member, and without the one comma that went with it."""
+    members = node["members"]
+    j = max(i for i, m in enumerate(members) if m["key"] == key)
+    m = members[j]
+    start, end = m["start"], m["value"]["end"]
+    if m["comma"] is not None:
+        end = m["comma"] + 1
+    elif j > 0:
+        # The last member, with no comma of its own: the separator to take is the
+        # one in front of it, which leaves the member before it last.
+        start = members[j - 1]["comma"]
+    # A comment trailing the member on its own line goes with it.
+    le = _rest_of_line(text, end)
+    if le is not None:
+        end = le
+    # And so does the line, when the member stood on one of its own.
+    ls = text.rfind("\n", 0, start) + 1
+    if text[ls:start].strip(" \t") == "" and (end >= len(text) or text[end] == "\n"):
+        start = ls
+        if end < len(text):
+            end += 1
+    return text[:start] + text[end:]
+
+
+def replace_member(text, node, key, value, unit):
+    m = [m for m in node["members"] if m["key"] == key][-1]
+    base = line_indent(text, m["start"])
+    v = m["value"]
+    return text[:v["start"]] + render(value, base, unit) + text[v["end"]:]
+
+
+def add_member(text, node, key, value, unit):
+    members = node["members"]
+    if not members:
+        outer = line_indent(text, node["start"])
+        inner_start, inner_end = node["start"] + 1, node["end"] - 1
+        entry = "%s: %s" % (json.dumps(key, ensure_ascii=False), render(value, outer + unit, unit))
+        if text[inner_start:inner_end].strip(WS) == "":
+            return text[:inner_start] + "\n" + outer + unit + entry + "\n" + outer + text[inner_end:]
+        # Only comments inside: the member goes first and they follow it.
+        return text[:inner_start] + "\n" + outer + unit + entry + text[inner_start:]
+
+    last = members[-1]
+    base = _member_base(text, node, last, unit)
+    entry = "%s: %s" % (json.dumps(key, ensure_ascii=False), render(value, base, unit))
+    trailing = last["comma"] is not None
+    anchor = last["comma"] + 1 if trailing else last["value"]["end"]
+    le = _rest_of_line(text, anchor)
+    if le is not None:
+        # The last member ends its line, perhaps with a comment: the comma goes
+        # straight after its value — never after the comment, where it would be part
+        # of the comment — and the new member on a line of its own below.
+        if trailing:
+            return text[:le] + "\n" + base + entry + "," + text[le:]
+        vend = last["value"]["end"]
+        return text[:vend] + "," + text[vend:le] + "\n" + base + entry + text[le:]
+    # Something else follows on the same line, such as the closing brace of a
+    # one-line object: the member joins that line.
+    if trailing:
+        return text[:anchor] + " " + entry + "," + text[anchor:]
+    vend = last["value"]["end"]
+    return text[:vend] + ", " + entry + text[vend:]
+
+
+def edit_one(text, node, key, value, unit):
+    """Assign `value` to `key` (or remove it, for DELETE) in one object node."""
+    present = any(m["key"] == key for m in node["members"])
+    if value is DELETE:
+        return delete_member(text, node, key) if present else text
+    if present:
+        return replace_member(text, node, key, value, unit)
+    return add_member(text, node, key, value, unit)
+
+
+def find_scope(root, scope):
+    """The node `scope` names, or (depth, node) of the deepest object on its way."""
+    node = root
+    for depth, key in enumerate(scope):
+        member = next((m for m in reversed(node["members"]) if m["key"] == key), None)
+        if member is None or member["value"]["kind"] != "object":
+            return None, depth, node
+        node = member["value"]
+    return node, len(scope), node
+
+
+def apply_all(text, scope, updates, unit):
+    """Every update, one splice at a time, each on the text the last one produced.
+
+    Re-reading between edits is what keeps them honest: offsets taken from one
+    parse and applied after another edit has moved the text are how two deletions
+    once overlapped and cut the closing brace off a config.
     """
-    members = {m["key"]: m for m in node["members"]}
-    edits = []          # (start, end, replacement)
-    additions = []
-
-    for key, val in updates.items():
-        m = members.get(key)
-        if val is DELETE:
-            if not m:
-                continue
-            start, end = m["start"], m["end"]
-            # Swallow the separator so the object does not end up with a hole.
-            after = end
-            while after < len(text) and text[after] in WS:
-                after += 1
-            if after < len(text) and text[after] == ",":
-                end = after + 1
+    doc, root = parse(text)
+    target, depth, deepest = find_scope(root, scope)
+    if target is None:
+        # The scope is missing (or is not an object) from `depth` on. It is built
+        # whole, in one assignment at the deepest object that does exist.
+        container = doc
+        for key in scope[:depth]:
+            container = container[key]
+        existing = container.get(scope[depth])
+        nested = dict(existing) if isinstance(existing, dict) else {}
+        for k, v in updates.items():
+            if v is DELETE:
+                nested.pop(k, None)
             else:
-                before = start
-                while before > 0 and text[before - 1] in WS:
-                    before -= 1
-                if before > 0 and text[before - 1] == ",":
-                    start = before - 1
-            # Take the blank line the member used to occupy with it.
-            ls = text.rfind("\n", 0, start) + 1
-            if text[ls:start].strip() == "":
-                start = ls
-                if end < len(text) and text[end] == "\n":
-                    end += 1
-            edits.append((start, end, ""))
-        else:
-            if m:
-                base = line_indent(text, m["start"])
-                edits.append((m["value"]["start"], m["value"]["end"], render(val, base, unit)))
-            else:
-                additions.append((key, val))
-
-    if additions:
-        close = node["end"] - 1  # the '}'
-        base = line_indent(text, node["members"][0]["start"]) if node["members"] else line_indent(text, node["start"]) + unit
-        chunks = []
-        for key, val in additions:
-            chunks.append("%s%s: %s" % (base, json.dumps(key, ensure_ascii=False), render(val, base, unit)))
-        body = ",\n".join(chunks)
-        cut = close
-        while cut > 0 and text[cut - 1] in WS:
-            cut -= 1
-        lead = ",\n" if node["members"] else "\n"
-        tail = "\n" + line_indent(text, node["start"])
-        if node["members"] and text[cut - 1] == ",":
-            lead = "\n"
-        edits.append((cut, close, lead + body + tail))
-
-    for start, end, rep in sorted(edits, key=lambda e: -e[0]):
-        text = text[:start] + rep + text[end:]
+                nested[k] = v
+        for k in scope[depth + 1:][::-1]:
+            nested = {k: nested}
+        return edit_one(text, deepest, scope[depth], nested, unit)
+    for key, value in updates.items():
+        _, root = parse(text)
+        target, _, _ = find_scope(root, scope)
+        text = edit_one(text, target, key, value, unit)
     return text
+
+
+def expected_document(doc, scope, updates):
+    """What the file must read as once the edit is done: the same document, with
+    the updates made at the scope and nothing else different."""
+    out = json.loads(json.dumps(doc))
+    container = out
+    for key in scope:
+        if not isinstance(container.get(key), dict):
+            container[key] = {}
+        container = container[key]
+    for k, v in updates.items():
+        if v is DELETE:
+            container.pop(k, None)
+        else:
+            container[k] = v
+    return out
 
 
 class _Delete:
@@ -281,23 +413,107 @@ def descend(value, scope):
     return value if isinstance(value, dict) else None
 
 
+def read_payload(stream):
+    """The payload off stdin: bounded, UTF-8, and one JSON object or nothing.
+
+    One byte past the cap is asked for, so a payload exactly at it is accepted and
+    anything longer is refused rather than parsed short. A terminal is refused
+    instead of waited on: a person running this by hand gets told where the
+    payload goes, not a prompt-less hang.
+    """
+    if stream is None or stream.closed:
+        raise Bad("apply reads the payload on stdin, and there is no stdin")
+    if stream.isatty():
+        raise Bad("apply reads the payload on stdin; pipe it in")
+    # A loop, because a read may come back short of what was asked for without
+    # the stream being at its end.
+    chunks, total = [], 0
+    while True:
+        chunk = stream.buffer.read(min(65536, MAX_PAYLOAD_BYTES + 1 - total))
+        if chunk is None:
+            raise Bad("stdin is non-blocking and had nothing to read")
+        if not chunk:
+            break
+        chunks.append(chunk)
+        total += len(chunk)
+        if total > MAX_PAYLOAD_BYTES:
+            raise Bad("the payload is larger than %d bytes" % MAX_PAYLOAD_BYTES)
+    # RecursionError is not a ValueError: a payload nested a few hundred deep would
+    # otherwise end this in a traceback. The decoder's own message is not passed
+    # on either; its exception carries the payload it was decoding.
+    try:
+        payload = json.loads(b"".join(chunks).decode("utf-8"))
+    except (UnicodeDecodeError, ValueError, RecursionError):
+        raise Bad("the payload on stdin is not JSON, or is nested too deeply") from None
+    if not isinstance(payload, dict):
+        raise Bad("the payload on stdin is not a JSON object")
+    return payload
+
+
+def emit(text):
+    """The result, as UTF-8 whatever the locale says.
+
+    The file was read as UTF-8, so it is written back as UTF-8. Going through
+    sys.stdout instead encodes in the locale's charset: under a latin-1 locale,
+    or a PYTHONIOENCODING that is not UTF-8, a config with one non-ASCII comment
+    would come back re-encoded, or not at all.
+    """
+    sys.stdout.buffer.write(text.encode("utf-8"))
+    sys.stdout.buffer.flush()
+
+
 def main(argv):
     if len(argv) < 3:
         sys.stderr.write(__doc__)
         return 1
     mode, path = argv[1], argv[2]
-    scope, payload, manages = [], None, None
+    scope, manages = [], None
     i = 3
     while i < len(argv):
         a = argv[i]
+        if a in ("--scope", "--manages") and i + 1 >= len(argv):
+            sys.stderr.write("jsonc-edit: %s needs a value\n" % a)
+            return 1
         if a == "--scope":
             scope.append(argv[i + 1]); i += 2
-        elif a == "--payload":
-            payload = json.loads(argv[i + 1]); i += 2
         elif a == "--manages":
-            manages = json.loads(argv[i + 1]); i += 2
+            try:
+                manages = json.loads(argv[i + 1])
+            except ValueError:
+                manages = None
+            if not (isinstance(manages, list) and all(isinstance(k, str) for k in manages)):
+                sys.stderr.write("jsonc-edit: --manages must be a JSON array of key names\n")
+                return 1
+            i += 2
+        elif a == "--payload" or a.startswith("--payload="):
+            # Refused before its value is so much as looked at. By the time this
+            # runs the value has already been on the command line, so the refusal
+            # cannot undo that; it can make sure the caller that did it fails loudly
+            # every time, which is how it gets found and fixed.
+            sys.stderr.write("jsonc-edit: --payload is not accepted; the command line is "
+                             "readable by every account through /proc. Pipe the payload "
+                             "on stdin.\n")
+            return 1
         else:
             sys.stderr.write("jsonc-edit: unknown option %s\n" % a)
+            return 1
+
+    if mode not in ("read", "apply"):
+        sys.stderr.write("jsonc-edit: unknown mode %s\n" % mode)
+        return 1
+
+    # The payload is taken whole before the file is so much as opened. A refusal
+    # further down then leaves nobody upstream writing into a pipe that has
+    # stopped being read.
+    payload = None
+    if mode == "apply":
+        if manages is None:
+            sys.stderr.write("jsonc-edit: apply needs --manages\n")
+            return 1
+        try:
+            payload = read_payload(sys.stdin)
+        except Bad as exc:
+            sys.stderr.write("jsonc-edit: %s\n" % exc)
             return 1
 
     try:
@@ -312,59 +528,72 @@ def main(argv):
         sys.stderr.write("jsonc-edit: %s\n" % exc)
         return 1
 
+    # A byte-order mark is read past and written back: editors that add one also
+    # expect to find it again.
+    bom = ""
+    if text.startswith("\ufeff"):
+        bom, text = "\ufeff", text[1:]
+
+    # ValueError is a string literal json itself will not decode, and RecursionError
+    # a file nested deeper than the scanner recurses. Neither is a reason for a
+    # traceback, and neither message is passed on: both carry the text.
     try:
         doc, root = parse(text)
     except Bad as exc:
         sys.stderr.write("jsonc-edit: %s: %s\n" % (path, exc))
+        return 1
+    except (ValueError, RecursionError):
+        sys.stderr.write("jsonc-edit: %s: not readable JSONC, or nested too deeply\n" % path)
         return 1
     if not isinstance(doc, dict):
         sys.stderr.write("jsonc-edit: %s is not a JSON object\n" % path)
         return 1
 
     if mode == "read":
-        sys.stdout.write(json.dumps(descend(doc, scope) or {}, ensure_ascii=False))
+        # ASCII out, so a string the file spells as a lone surrogate escape reaches
+        # the caller as that escape rather than ending this in an encoding error.
+        emit(json.dumps(descend(doc, scope) or {}, ensure_ascii=True))
         return 0
-
-    if mode != "apply":
-        sys.stderr.write("jsonc-edit: unknown mode %s\n" % mode)
-        return 1
-    if payload is None or manages is None:
-        sys.stderr.write("jsonc-edit: apply needs --payload and --manages\n")
-        return 1
 
     updates = {k: (payload[k] if k in payload else DELETE) for k in manages}
     if not updates:
-        sys.stdout.write(text)
+        emit(bom + text)
         return 0
 
-    unit = detect_indent(text)
-
-    if scope:
-        # The scope object may not exist yet. Building it in one assignment keeps
-        # the splice to a single key at the level above.
-        node, container = root, doc
-        for depth, key in enumerate(scope):
-            member = next((m for m in node["members"] if m["key"] == key), None)
-            if member is None or member["value"]["kind"] != "object":
-                fresh = descend(doc, scope[:depth]) or {}
-                nested = dict(container.get(key) or {}) if isinstance(container.get(key), dict) else {}
-                for k, v in updates.items():
-                    if v is DELETE:
-                        nested.pop(k, None)
-                    else:
-                        nested[k] = v
-                for k in scope[depth + 1:][::-1]:
-                    nested = {k: nested}
-                sys.stdout.write(splice(text, node, {key: nested}, unit))
-                return 0
-            node = member["value"]
-            container = container[key]
-        sys.stdout.write(splice(text, node, updates, unit))
-        return 0
-
-    sys.stdout.write(splice(text, root, updates, unit))
+    try:
+        new_text = apply_all(text, scope, updates, detect_indent(text))
+        # Nothing leaves here that has not been read back. The new text has to parse
+        # — commas and all — and has to say exactly what the old one said with the
+        # updates made, at the scope and nowhere else. A splice that got any of that
+        # wrong is a refusal, never a config written over the user's own.
+        got, _ = parse(new_text)
+    except Bad as exc:
+        sys.stderr.write("jsonc-edit: %s: the edit could not be made safely (%s)\n" % (path, exc))
+        return 1
+    except (ValueError, RecursionError):
+        sys.stderr.write("jsonc-edit: %s: the edit could not be made safely\n" % path)
+        return 1
+    if got != expected_document(doc, scope, updates):
+        sys.stderr.write("jsonc-edit: %s: the edit did not read back as intended; "
+                         "nothing was written\n" % path)
+        return 1
+    try:
+        out = (bom + new_text).encode("utf-8")
+    except UnicodeEncodeError:
+        sys.stderr.write("jsonc-edit: the payload holds text that is not valid Unicode\n")
+        return 1
+    sys.stdout.buffer.write(out)
+    sys.stdout.buffer.flush()
     return 0
 
 
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    try:
+        sys.exit(main(sys.argv))
+    except BrokenPipeError:
+        # Whoever was reading the result has gone, so there is nobody to tell, and
+        # the write over a config that depended on it has already failed upstream.
+        # Python flushes stdout again on the way out; pointing it at /dev/null first
+        # keeps that second failure from printing a traceback of its own.
+        os.dup2(os.open(os.devnull, os.O_WRONLY), sys.stdout.fileno())
+        sys.exit(1)

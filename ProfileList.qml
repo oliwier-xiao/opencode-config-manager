@@ -323,7 +323,8 @@ Item {
 
             Button {
               visible: root.activeProfile !== null
-              text: "Update “" + (root.activeProfile ? root.activeProfile.name : "") + "”"
+              // A shell Button, not a Text of ours: the name is flattened first.
+              text: "Update “" + Model.plain(root.activeProfile ? root.activeProfile.name : "") + "”"
               fontSize: Style.font.caption
               bordered: true
               enabled: !root.busy

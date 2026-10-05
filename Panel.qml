@@ -51,6 +51,7 @@ Panel {
   // is the allocation. These count bytes on the wire; a QString of them costs
   // the shell rather more. Kept so both ends of each pipe have to agree.
   readonly property int maxCatalogBytes: 12 * 1024 * 1024
+  readonly property int maxTemplateBytes: 1024 * 1024
   readonly property int maxOutputBytes: 4 * 1024 * 1024
 
   // Qt.resolvedUrl percent-encodes: a home directory with a space in it would
@@ -60,13 +61,65 @@ Panel {
     try { return decodeURIComponent(s) } catch (e) { return s }
   }
   readonly property string pluginDir: root.fromFileUrl(Qt.resolvedUrl("."))
-  readonly property var actionEnv: ({
+  readonly property string home: String(Quickshell.env("HOME") || "")
+
+  // ---- What a helper is started with --------------------------------------
+  // Every process this panel starts gets a cleared environment and then exactly
+  // this: the system's own directories as PATH, so nothing earlier in a longer PATH
+  // stands in for jq or python3, and none of LD_PRELOAD, BASH_ENV or PYTHONPATH;
+  // HOME and the XDG folders, so the helpers find the same files opencode does; and
+  // the settings below. See HelperProcess.qml for the rest of what each run gets.
+  function childEnv(extra) {
+    var env = { "PATH": "/usr/bin:/bin", "LANG": "C.UTF-8" }
+    var pass = ["HOME", "XDG_CONFIG_HOME", "XDG_CACHE_HOME", "XDG_DATA_HOME",
+                "XDG_STATE_HOME", "XDG_RUNTIME_DIR", "OMO_CONFIG_HOME"]
+    for (var i = 0; i < pass.length; i++) {
+      var v = Quickshell.env(pass[i])
+      if (v !== null && v !== undefined && String(v) !== "") env[pass[i]] = String(v)
+    }
+    if (extra) for (var k in extra) {
+      if (extra[k] !== null && extra[k] !== undefined) env[k] = String(extra[k])
+    }
+    return env
+  }
+
+  // The config folder the plugin was told to use, or else the one opencode is
+  // told to use in this session, or else none, and the helpers take opencode's
+  // own default.
+  readonly property string effectiveConfigDir: root.configDir !== ""
+    ? root.configDir : String(Quickshell.env("OPENCODE_CONFIG_DIR") || "")
+
+  readonly property var actionEnv: root.childEnv({
     "OC_MANAGE_OHMY": root.manageOhMyOpenAgent ? "1" : "0",
     "OC_MANAGE_OPENCODE": root.manageOpencodeJson ? "1" : "0",
     "OC_AUTO_RELOAD": root.afterSwitch === "Restart opencode" ? "1" : "0",
     "OC_BACKUPS_KEEP": String(root.keepBackups),
-    "OPENCODE_CONFIG_DIR": root.configDir
+    "OPENCODE_CONFIG_DIR": root.effectiveConfigDir !== "" ? root.effectiveConfigDir : null
   })
+
+  // The same, naming the profile a verb acts on. An id or a name is something the
+  // user typed, or is made from one, so it goes in the environment — which only this
+  // account can read — and never on the command line, which every account can.
+  function profileEnv(id, name) {
+    var env = {}
+    for (var k in root.actionEnv) env[k] = root.actionEnv[k]
+    if (id) env["OC_PROFILE_ID"] = String(id)
+    if (name) env["OC_PROFILE_NAME"] = String(name)
+    return env
+  }
+
+  // For the two programs that talk to the desktop rather than to a file: the
+  // notification and the editor that opens a config.
+  function desktopEnv() {
+    var env = root.childEnv()
+    var pass = ["DBUS_SESSION_BUS_ADDRESS", "WAYLAND_DISPLAY", "DISPLAY", "XDG_CURRENT_DESKTOP",
+                "XDG_SESSION_TYPE", "XDG_DATA_DIRS", "XDG_CONFIG_DIRS"]
+    for (var i = 0; i < pass.length; i++) {
+      var v = Quickshell.env(pass[i])
+      if (v !== null && v !== undefined && String(v) !== "") env[pass[i]] = String(v)
+    }
+    return env
+  }
 
   // ---- State -------------------------------------------------------------
 
@@ -158,7 +211,7 @@ Panel {
   readonly property bool hasOpencode: !detected || detected.ok !== false
 
   readonly property string tooltipText: {
-    if (root.configBroken) return root.errorMessage
+    if (root.configBroken) return root.plain(root.errorMessage)
     if (!root.activeProfile) return "No profile matches the live config"
     var head = root.plain(root.activeProfile.name)
     if (root.drift) head += ", edited"
@@ -197,16 +250,16 @@ Panel {
   }
 
   Component.onCompleted: {
-    templatesFile.reload()
+    templatesRead.launch()
     root.loadCatalog()
     root.maybeSyncCatalog()
     Qt.callLater(root.reload)
   }
 
   function reload() {
-    if (!listProc.running) listProc.running = true
-    if (!detectProc.running) detectProc.running = true
-    if (!doctorProc.running) doctorProc.running = true
+    if (!listProc.running) listProc.launch()
+    if (!detectProc.running) detectProc.launch()
+    if (!doctorProc.running) doctorProc.launch()
   }
 
   function refresh() {
@@ -217,7 +270,7 @@ Panel {
       root.forcePending = true
     } else {
       catalogSync.force = true
-      catalogSync.running = true
+      catalogSync.launch()
     }
     reload()
   }
@@ -230,7 +283,7 @@ Panel {
   function maybeSyncCatalog() {
     if (catalogSync.running) return
     catalogSync.force = false
-    catalogSync.running = true
+    catalogSync.launch()
   }
 
   function clearError() { root.errorCode = ""; root.errorMessage = ""; root.errorPath = "" }
@@ -265,14 +318,20 @@ Panel {
 
   // Every write: hand oc-profiles a verb, take one line of JSON back, then re-read.
   // Re-reading rather than patching local state keeps the panel honest about disk.
-  function runAction(args, env, onDone) {
+  // `input` is written to the helper's stdin: a profile or a list of favourites is
+  // content, and content never goes on a command line.
+  function runAction(args, env, onDone, input) {
     if (root.busy) return
     root.busy = true
     root.clearError()
     actionProc.pending = onDone || null
-    actionProc.environment = env ? env : root.actionEnv
-    actionProc.command = [root.pluginDir + "/bin/oc-profiles"].concat(args)
-    actionProc.running = true
+    actionProc.env = env ? env : root.actionEnv
+    actionProc.args = args
+    actionProc.input = input || ""
+    if (!actionProc.launch()) {
+      root.busy = false
+      actionProc.pending = null
+    }
   }
 
   function applyProfile(id) {
@@ -281,7 +340,7 @@ Panel {
     if (!profile) return
     if (id === root.activeProfileId && !root.drift) return
 
-    runAction(["apply", id], root.actionEnv, function (res) {
+    runAction(["apply"], root.profileEnv(id), function (res) {
       if (!res || res.ok !== true) return
       root.toast = "Now running “" + profile.name + "”."
       toastTimer.restart()
@@ -303,12 +362,14 @@ Panel {
   // action, so the section re-reads after each fix.
   function fixHealthIssue(issue) {
     if (!issue || !issue.code) return
-    var args = ["repair", "--fix", String(issue.code)]
-    var pid = (issue && (issue.profile || issue.profileId || issue.profile_id)) || ""
-    if (pid) args.push("--profile", String(pid))
-    args.push("--apply")
+    // The code is the backend's own fixed vocabulary, and only something shaped like
+    // it is ever an argument; the profile it names, if any, is the user's, and
+    // travels in the environment.
     var code = String(issue.code)
-    runAction(args, root.actionEnv, function (res) {
+    if (!/^[EW]_[A-Z0-9_]{1,60}$/.test(code)) return
+    var args = ["repair", "--fix", code, "--apply"]
+    var pid = (issue && (issue.profile || issue.profileId || issue.profile_id)) || ""
+    runAction(args, root.profileEnv(pid, ""), function (res) {
       if (!res || res.ok !== true) return
       root.toast = "Fixed " + root.plain(code) + "."
       toastTimer.restart()
@@ -317,7 +378,7 @@ Panel {
 
   function saveCurrentAsProfile() {
     var name = root.uniqueName("Saved config")
-    runAction(["capture", name], root.actionEnv, null)
+    runAction(["capture"], root.profileEnv("", name), null)
   }
 
   // Same capture, but it opens the editor: "from scratch" means you are about
@@ -374,7 +435,7 @@ Panel {
 
   function newProfileFromScratch() {
     var name = root.uniqueName("New profile")
-    runAction(["capture", name], root.actionEnv, function (res) {
+    runAction(["capture"], root.profileEnv("", name), function (res) {
       if (!res || res.ok !== true) return
       root.pendingEditorId = res.id
     })
@@ -400,7 +461,7 @@ Panel {
 
   function updateActiveFromDisk() {
     if (!root.activeProfile) return
-    runAction(["capture", root.activeProfile.name, root.activeProfile.id], root.actionEnv, function (res) {
+    runAction(["capture"], root.profileEnv(root.activeProfile.id, root.activeProfile.name), function (res) {
       if (!res || res.ok !== true) return
       root.toast = "“" + root.activeProfile.name + "” now matches what is on disk."
       toastTimer.restart()
@@ -421,24 +482,20 @@ Panel {
   }
 
   function deleteProfile(id) {
-    runAction(["delete", id], root.actionEnv, null)
+    runAction(["delete"], root.profileEnv(id, ""), null)
   }
 
+  // The profile goes on stdin. Never in argv, which every account on the machine
+  // can read through /proc; and no longer in the environment either, which only this
+  // account can read but which execve refuses past 128 KiB — a profile carrying long
+  // agent prompts then could not be saved at all, and nothing said why.
   function saveProfile(profile, onDone) {
-    var env = {}
-    for (var k in root.actionEnv) env[k] = root.actionEnv[k]
-    // Quickshell's Process cannot write to a child's stdin, so the profile travels
-    // in the environment — not argv, which every process listing on the box shows.
-    env["OC_PROFILE_JSON"] = JSON.stringify(profile)
-    runAction(["save"], env, onDone)
+    runAction(["save"], root.actionEnv, onDone, JSON.stringify(profile))
   }
 
   function savePrefs(favorites, recents) {
     if (root.busy) return
-    var env = {}
-    for (var k in root.actionEnv) env[k] = root.actionEnv[k]
-    env["OC_PREFS_JSON"] = JSON.stringify({ favorites: favorites, recents: recents })
-    runAction(["prefs"], env, null)
+    runAction(["prefs"], root.actionEnv, null, JSON.stringify({ favorites: favorites, recents: recents }))
   }
 
   function uniqueName(base) {
@@ -456,14 +513,20 @@ Panel {
     if (root.afterSwitch === "Nothing") return
     if (running === 0) return
 
-    if (res.reloaded > 0) {
-      notify.command = ["notify-send", "-a", "OpenCode Configs", "-t", "4000",
-                        "Now running “" + profile.name + "”",
-                        "Reloaded " + res.reloaded + (res.reloaded === 1 ? " session" : " sessions")
+    // Fixed words and counts only. A notification is sent by a program, and that
+    // program's arguments are readable by every account on the machine; a profile's
+    // name is the user's own text, so it stays in the panel's toast.
+    if (notify.running) return
+    var reloaded = Math.floor(Number(res.reloaded)) || 0
+    running = Math.floor(Number(running)) || 0
+    if (reloaded > 0) {
+      notify.command = ["/usr/bin/timeout", "-k", "2", "10", "/usr/bin/notify-send",
+                        "-a", "OpenCode Configs", "-t", "4000", "OpenCode profile switched",
+                        "Reloaded " + reloaded + (reloaded === 1 ? " session" : " sessions")
                         + " in place — your history is intact."]
     } else {
-      notify.command = ["notify-send", "-a", "OpenCode Configs", "-t", "6000",
-                        "Switched to “" + profile.name + "”",
+      notify.command = ["/usr/bin/timeout", "-k", "2", "10", "/usr/bin/notify-send",
+                        "-a", "OpenCode Configs", "-t", "6000", "OpenCode profile switched",
                         "Run 'omarchy-restart-opencode' to load it into the "
                         + running + " session" + (running === 1 ? "" : "s") + " already open."]
     }
@@ -514,7 +577,7 @@ Panel {
       // any other profile never touches the live config.
       if (wasActive) {
         root.busy = false
-        runAction(["apply", id], root.actionEnv, function (r2) {
+        runAction(["apply"], root.profileEnv(id, ""), function (r2) {
           if (!r2 || r2.ok !== true) return
           root.toast = "Saved and applied."
           toastTimer.restart()
@@ -698,7 +761,7 @@ Panel {
         onSaveCurrentRequested: root.askAddProfile()
         onUpdateActiveRequested: root.updateActiveFromDisk()
         onUndoRequested: root.revert()
-        onOpenFileRequested: function (path) { Quickshell.execDetached(["xdg-open", path]) }
+        onOpenFileRequested: function (path) { root.openConfigFile(path) }
         onCursorMoved: function (index) { root.cursorActive = true; root.selectedIndex = index }
         onDismissToast: root.toast = ""
         onFixRequested: function (index) {
@@ -721,6 +784,7 @@ Panel {
         recents: root.recents
         showMeta: root.showModelMeta
         busy: root.busy
+        errorMessage: root.errorMessage
         isActiveProfile: root.draft && root.draft.id === root.activeProfileId
         cursorActive: root.cursorActive
         selectedIndex: root.selectedIndex
@@ -840,221 +904,228 @@ Panel {
   }
 
   // ---- Processes ---------------------------------------------------------
+  // Each one a HelperProcess: bin/run-bounded under /usr/bin/bash, a cleared
+  // environment, HOME as the folder, a deadline, a byte cap, and a watchdog behind
+  // both. The caps are the same numbers the helpers hold themselves to.
 
-  Process {
+  HelperProcess {
     id: listProc
-    command: [root.pluginDir + "/bin/oc-profiles", "list"]
-    environment: root.actionEnv
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (!Model.withinLimit(text, root.maxOutputBytes)) return
-        var parsed = Model.parseJson(text, null)
-        if (root.takeReadRefusal(parsed)) return
-        if (parsed && Array.isArray(parsed.profiles)) {
-          root.store = parsed
-          root.loaded = true
-          if (parsed.profiles.length === 0 && !root.seedTried && !root.busy) {
-            root.seedTried = true
-            root.runAction(["seed"], root.actionEnv, null)
-            return
-          }
-          if (root.selectedIndex >= parsed.profiles.length) root.selectedIndex = 0
-          if (root.pendingEditorId !== "") {
-            var wanted = root.pendingEditorId
-            root.pendingEditorId = ""
-            root.openEditor(wanted)
-          }
-        }
-      }
-    }
-  }
-
-  Process {
-    id: detectProc
-    command: [root.pluginDir + "/bin/oc-profiles", "detect"]
-    environment: root.actionEnv
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        if (!Model.withinLimit(text, root.maxOutputBytes)) return
-        var parsed = Model.parseJson(text, null)
-        if (!parsed) return
-        if (root.takeReadRefusal(parsed)) return
-        root.detected = parsed
-        // Detect reads the rosters off the installed software and says which of
-        // the two shapes is actually running. Both have to reach Model before
-        // anything draws, or the first paint is of the wrong panel.
-        var rosterMoved = Model.setRoster(parsed.roster)
-        var shapeMoved = Model.setShape(String(parsed.shape || "opencode"))
-        // Model.js is a `.pragma library`, so those two write globals that no
-        // binding depends on: every row already drawn keeps the shape it was drawn
-        // with. `list` almost always lands first, so that shape is the wrong one.
-        // Re-seating the store is the dependency all of them do share, and it is
-        // only paid when something actually moved.
-        // And a counter that IS a QML property, so a binding can depend on it. The
-        // re-seat below only reaches rows drawn from the store, and only once the
-        // store has arrived; anything that reads Model.roster() or Model.shape()
-        // directly — every row summary in the list — had no way to know it had gone
-        // stale. That is a profile reading "2 of 6 pinned" against the built-in
-        // roster while holding twenty-four rows.
-        if (rosterMoved || shapeMoved) root.shapeGeneration++
-        if ((rosterMoved || shapeMoved) && root.loaded) root.store = Model.clone(root.store)
-        // A config that will not parse is the one state where nothing else in
-        // the panel means anything, so it outranks every other message.
-        var warnings = parsed.warnings || []
-        for (var i = 0; i < warnings.length; i++) {
-          var w = warnings[i]
-          if (w.code === "E_PARSE") {
-            root.setError(w.code, root.basename(w.file) + " will not parse. Nothing was changed.", w.file)
-            return
-          }
-        }
-        if (root.errorCode === "E_PARSE") root.clearError()
-
-        // A `model` or `agent` key in ~/.opencode/opencode.json is loaded last and beats
-        // everything this panel writes — unsaid, a switch looks like it did nothing.
-        var notice = ""
-        for (var w = 0; w < warnings.length; w++) {
-          if (warnings[w].code === "W_HOME_OVERRIDE") {
-            notice = "~/.opencode/opencode.json sets “" + warnings[w].key
-                   + "”, and it is read after this one. Switching profiles will not change it."
-            break
-          }
-          if (warnings[w].code === "W_SHADOWED" && notice === "") {
-            notice = "A project config in " + warnings[w].dir + " takes precedence here."
-          }
-        }
-        root.notice = notice
-      }
-    }
-  }
-
-  // Health, read on every reload() alongside list and detect. The `doctor` verb
-  // belongs to a parallel change: when it is missing, prints usage, exits
-  // non-zero, or returns anything but {ok:true, issues:[...]}, the section hides
-  // entirely — no crash, no banner. Each issue keeps its backend shape
-  // ({code,file,detail,fixable,fix,...}); the panel never validates it here.
-  Process {
-    id: doctorProc
-    command: [root.pluginDir + "/bin/oc-profiles", "doctor"]
-    environment: root.actionEnv
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var parsed = null
-        try { parsed = JSON.parse(String(text || "")) } catch (e) { parsed = null }
-        if (!parsed || parsed.ok !== true || !Array.isArray(parsed.issues)) {
-          root.healthIssues = []
+    pluginDir: root.pluginDir
+    home: root.home
+    env: root.actionEnv
+    helper: "oc-profiles"
+    args: ["list"]
+    seconds: 40
+    maxBytes: root.maxOutputBytes
+    onAnswered: function (code, out) {
+      var parsed = Model.parseJson(out, null)
+      if (root.takeReadRefusal(parsed)) return
+      if (parsed && Array.isArray(parsed.profiles)) {
+        root.store = parsed
+        root.loaded = true
+        if (parsed.profiles.length === 0 && !root.seedTried && !root.busy) {
+          root.seedTried = true
+          root.runAction(["seed"], root.actionEnv, null)
           return
         }
-        var out = []
-        for (var i = 0; i < parsed.issues.length; i++) {
-          var it = parsed.issues[i]
-          if (!it || typeof it.code !== "string" || it.code === "") continue
-          out.push(it)
+        if (root.selectedIndex >= parsed.profiles.length) root.selectedIndex = 0
+        if (root.pendingEditorId !== "") {
+          var wanted = root.pendingEditorId
+          root.pendingEditorId = ""
+          root.openEditor(wanted)
         }
-        root.healthIssues = out
       }
-    }
-    onExited: function (code) {
-      if (code !== 0) root.healthIssues = []
     }
   }
 
-  Process {
+  HelperProcess {
+    id: detectProc
+    pluginDir: root.pluginDir
+    home: root.home
+    env: root.actionEnv
+    helper: "oc-profiles"
+    args: ["detect"]
+    seconds: 40
+    maxBytes: root.maxOutputBytes
+    onAnswered: function (code, out) {
+      var parsed = Model.parseJson(out, null)
+      if (!parsed) return
+      if (root.takeReadRefusal(parsed)) return
+      root.detected = parsed
+      // Detect reads the rosters off the installed software and says which of
+      // the two shapes is actually running. Both have to reach Model before
+      // anything draws, or the first paint is of the wrong panel.
+      var rosterMoved = Model.setRoster(parsed.roster)
+      var shapeMoved = Model.setShape(String(parsed.shape || "opencode"))
+      // Model.js is a `.pragma library`, so those two write globals that no
+      // binding depends on: every row already drawn keeps the shape it was drawn
+      // with. `list` almost always lands first, so that shape is the wrong one.
+      // Re-seating the store is the dependency all of them do share, and it is
+      // only paid when something actually moved.
+      // And a counter that IS a QML property, so a binding can depend on it. The
+      // re-seat below only reaches rows drawn from the store, and only once the
+      // store has arrived; anything that reads Model.roster() or Model.shape()
+      // directly — every row summary in the list — had no way to know it had gone
+      // stale. That is a profile reading "2 of 6 pinned" against the built-in
+      // roster while holding twenty-four rows.
+      if (rosterMoved || shapeMoved) root.shapeGeneration++
+      if ((rosterMoved || shapeMoved) && root.loaded) root.store = Model.clone(root.store)
+      // A config that will not parse is the one state where nothing else in
+      // the panel means anything, so it outranks every other message.
+      var warnings = parsed.warnings || []
+      for (var i = 0; i < warnings.length; i++) {
+        var w = warnings[i]
+        if (w.code === "E_PARSE") {
+          root.setError(w.code, root.basename(w.file) + " will not parse. Nothing was changed.", w.file)
+          return
+        }
+      }
+      if (root.errorCode === "E_PARSE") root.clearError()
+
+      // A `model` or `agent` key in ~/.opencode/opencode.json is loaded last and beats
+      // everything this panel writes — unsaid, a switch looks like it did nothing.
+      var notice = ""
+      for (var j = 0; j < warnings.length; j++) {
+        if (warnings[j].code === "W_HOME_OVERRIDE") {
+          notice = "~/.opencode/opencode.json sets “" + root.plain(warnings[j].key)
+                 + "”, and it is read after this one. Switching profiles will not change it."
+          break
+        }
+        if (warnings[j].code === "W_SHADOWED" && notice === "") {
+          notice = "A project config in " + root.plain(warnings[j].dir) + " takes precedence here."
+        }
+      }
+      root.notice = notice
+    }
+  }
+
+  // Health, read on every reload() alongside list and detect. When the answer is
+  // anything but {ok:true, issues:[...]} the section hides entirely — no crash, no
+  // banner. Each issue keeps its backend shape ({code,file,detail,fixable,fix,...});
+  // the panel never validates it here.
+  HelperProcess {
+    id: doctorProc
+    pluginDir: root.pluginDir
+    home: root.home
+    env: root.actionEnv
+    helper: "oc-profiles"
+    args: ["doctor"]
+    seconds: 40
+    maxBytes: root.maxOutputBytes
+    onAnswered: function (code, out) {
+      var parsed = code === 0 ? Model.parseJson(out, null) : null
+      if (!parsed || parsed.ok !== true || !Array.isArray(parsed.issues)) {
+        root.healthIssues = []
+        return
+      }
+      var list = []
+      for (var i = 0; i < parsed.issues.length; i++) {
+        var it = parsed.issues[i]
+        if (!it || typeof it.code !== "string" || it.code === "") continue
+        list.push(it)
+      }
+      root.healthIssues = list
+    }
+  }
+
+  HelperProcess {
     id: actionProc
     property var pending: null
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var res = Model.withinLimit(text, root.maxOutputBytes) ? Model.parseJson(text, null) : null
-        if (res && res.ok === false) {
-          root.setError(res.code, res.message, res.file || "")
-        } else if (res) {
-          root.clearError()
-        }
-        var cb = actionProc.pending
-        actionProc.pending = null
-        root.busy = false
-        if (cb && res) cb(res)
-        root.reload()
-      }
-    }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var t = String(text || "").trim()
-        if (t !== "") console.warn("opencode-configs:", t.substring(0, 2000))
-      }
-    }
-    onExited: function (code) {
-      // A crash before the collector settles would otherwise leave the panel
-      // permanently busy with no way back except closing it.
-      if (code !== 0 && code !== 2 && code !== 3) {
-        root.busy = false
-        actionProc.pending = null
-        // 124 is the timebox, 137 and 143 are the signals behind it. All three
-        // arrive with nothing on stdout, so without this the panel would clear
-        // itself and quietly redraw the state from before the switch — the one
-        // case where doing nothing looks exactly like having done it.
+    pluginDir: root.pluginDir
+    home: root.home
+    helper: "oc-profiles"
+    seconds: 40
+    maxBytes: root.maxOutputBytes
+    onAnswered: function (code, out) {
+      var res = Model.parseJson(out, null)
+      if (res && res.ok === false) {
+        root.setError(res.code, res.message, res.file || "")
+      } else if (res) {
+        root.clearError()
+      } else {
+        // No answer at all. 124 is the deadline, 137 and 143 the signals behind it;
+        // -1 is a helper that never started; 141 one that printed past its cap.
+        // Without saying so the panel would clear itself and quietly redraw the
+        // state from before the switch — the one case where doing nothing looks
+        // exactly like having done it.
         root.setError("E_KILLED",
           code === 124 || code === 137 || code === 143
             ? "That took too long and was stopped. Your config was not changed."
+          : code === -1
+            ? "The plugin's helper could not be started. Nothing was changed."
+          : code === 141 || actionProc.overflowed
+            ? "The helper's answer was too large and was refused."
             : "Something went wrong and nothing was changed.", "")
-        root.reload()
       }
+      var cb = actionProc.pending
+      actionProc.pending = null
+      root.busy = false
+      if (cb && res) cb(res)
+      root.reload()
     }
   }
 
-  Process {
+  HelperProcess {
     id: catalogSync
     property bool force: false
-    command: [root.pluginDir + "/bin/sync-models.sh"]
-    environment: ({
+    pluginDir: root.pluginDir
+    home: root.home
+    helper: "sync-models.sh"
+    // A download with two retries, then `opencode models`, then the join.
+    seconds: 150
+    // One status word is all this prints; anything longer is not from us.
+    maxBytes: 4096
+    env: root.childEnv({
       "TTL": String(root.catalogRefreshHours * 3600),
       "FORCE": catalogSync.force ? "1" : "0",
       // The reachable list is built by running `opencode models`, and which models
       // that names depends on the config folder. Every other process this panel
       // starts is told which one; leaving this one out built the picker from a
       // different opencode than the one the profile is written for.
-      "OPENCODE_CONFIG_DIR": root.configDir
+      "OPENCODE_CONFIG_DIR": root.effectiveConfigDir !== "" ? root.effectiveConfigDir : null
     })
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        // One status word is all this prints; anything longer is not from us.
-        if (Model.withinLimit(text, 4096)) root.loadCatalog()
-      }
-    }
-    // Honoured here rather than in refresh(), because a Process that is already
-    // running cannot be told anything: its environment was read at spawn. The
-    // refresh the user asked for runs now, as the forced run it was meant to be.
-    onExited: {
+    onAnswered: function (code, out) {
+      if (code !== -1) root.loadCatalog()
       catalogSync.force = false
+      // Honoured here rather than in refresh(), because a run already going cannot
+      // be told anything: its environment was fixed when it started. The refresh
+      // the user asked for runs now, as the forced run it was meant to be.
       if (!root.forcePending) return
       root.forcePending = false
       catalogSync.force = true
-      catalogSync.running = true
+      catalogSync.launch()
     }
   }
 
-  Process { id: notify }
+  // A notification is fire-and-forget, so this has no answer to wait for: a fixed
+  // program, a deadline, a cleared environment with only what reaches the session
+  // bus, and no output read at all.
+  Process {
+    id: notify
+    clearEnvironment: true
+    environment: root.desktopEnv()
+    workingDirectory: root.home
+  }
 
   // ---- Catalog -----------------------------------------------------------
 
-  FileView {
-    id: templatesFile
-    path: root.pluginDir + "/assets/templates.json"
-    watchChanges: false
-    printErrors: false
-    onLoaded: {
-      var raw = text()
-      if (!Model.withinLimit(raw, root.maxCatalogBytes)) { root.templates = []; return }
-      var doc = Model.parseJson(raw, null)
+  // The panel opens no file itself, not even one that ships with the plugin. Its
+  // folder is as writable by this user as any other, and the read is the
+  // allocation: bin/read-templates decides on the descriptor it is about to read and
+  // prints at most maxTemplateBytes, so a FIFO or an oversized file planted at
+  // assets/templates.json never reaches this process at all.
+  HelperProcess {
+    id: templatesRead
+    pluginDir: root.pluginDir
+    home: root.home
+    env: root.childEnv()
+    helper: "read-templates"
+    seconds: 15
+    maxBytes: root.maxTemplateBytes
+    onAnswered: function (code, out) {
+      var doc = code === 0 ? Model.parseJson(out, null) : null
       root.templates = (doc && Array.isArray(doc.templates)) ? doc.templates : []
     }
-    onLoadFailed: root.templates = []
   }
 
   // The panel never opens the cache and is not given its path. bin/read-catalog
@@ -1063,42 +1134,36 @@ Panel {
   // so a symlink, a FIFO or a bigger file never reaches this process at all.
   // omarchy-shell is one process for every plugin on the desktop; the read is the
   // allocation, and refusing after text() has returned would be too late.
-  Process {
+  HelperProcess {
     id: catalogRead
-    command: [root.pluginDir + "/bin/read-catalog"]
-    stdout: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var raw = String(text || "")
-        // Already bounded by the reader; kept so the two ceilings must agree.
-        if (raw === "" || !Model.withinLimit(raw, root.maxCatalogBytes)) return
-        var c = Catalog.fromText(raw)
+    pluginDir: root.pluginDir
+    home: root.home
+    env: root.childEnv()
+    helper: "read-catalog"
+    seconds: 15
+    maxBytes: root.maxCatalogBytes
+    onAnswered: function (code, out) {
+      if (code === 0 && out !== "") {
+        var c = Catalog.fromText(out)
         // A truncated or unparseable cache leaves the picker on what it already
         // has, which is more useful than an empty list.
-        if (!c || !c.models || c.models.length === 0) return
-        root.catalog = c
-        root.catalogIndex = Catalog.byId(c)
+        if (c && c.models && c.models.length > 0) {
+          root.catalog = c
+          root.catalogIndex = Catalog.byId(c)
+        }
+        return
       }
-    }
-    stderr: StdioCollector {
-      waitForEnd: true
-      onStreamFinished: {
-        var t = String(text || "").trim()
-        if (t !== "") console.warn("opencode-configs:", t.substring(0, 500))
-      }
-    }
-    onExited: function (code) {
       // Nothing to read, or something that was refused: build one, once. Retrying on
       // every failure turns an offline first run into an unbounded spawn loop.
-      if (code === 0 || root.catalogSyncTried) return
+      if (root.catalogSyncTried) return
       root.catalogSyncTried = true
-      if (!catalogSync.running) catalogSync.running = true
+      if (!catalogSync.running) catalogSync.launch()
     }
   }
 
   function loadCatalog() {
     if (catalogRead.running) return
-    catalogRead.running = true
+    catalogRead.launch()
   }
 
   // The long arm of the refresh: the timer covers a shell left running for
@@ -1115,7 +1180,7 @@ Panel {
     running: true
     repeat: true
     triggeredOnStart: false
-    onTriggered: if (!catalogSync.running) catalogSync.running = true
+    onTriggered: if (!catalogSync.running) catalogSync.launch()
   }
 
   // ConfirmDialog's message and the bar tooltip are shell components that do
@@ -1123,7 +1188,22 @@ Panel {
   // fetch what a crafted string points at. Names come from a JSON file that a
   // second machine or a hand edit can write, so they are flattened first.
   function plain(s) {
-    return String(s || "").replace(/[<>&]/g, " ").replace(/\s+/g, " ").trim()
+    return Model.plain(s)
+  }
+
+  // The file a parse error names, in whatever the desktop opens it with. The path is
+  // one the backend reported for a config it reads, never a URL; it is checked to be
+  // an absolute path before it goes anywhere. Started detached and like every other
+  // process here: an absolute program, a cleared environment, HOME as its folder.
+  function openConfigFile(path) {
+    var p = String(path || "")
+    if (p.charAt(0) !== "/" || p.length > 4096 || /[\u0000-\u001f\u007f]/.test(p)) return
+    Quickshell.execDetached({
+      command: ["/usr/bin/xdg-open", p],
+      clearEnvironment: true,
+      environment: root.desktopEnv(),
+      workingDirectory: root.home
+    })
   }
 
   function basename(path) {

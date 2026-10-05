@@ -1,0 +1,60 @@
+#!/usr/bin/bash
+# run-bounded — the only way the panel starts one of this plugin's helpers.
+#
+# omarchy-shell is one process for the whole desktop, and a child it starts can
+# keep it waiting and fill its memory: Quickshell buffers whatever a child prints,
+# however much that is, for as long as it takes. So every limit is enforced out
+# here, at the end the bytes come out of, by programs named by absolute path:
+#
+#   a deadline     /usr/bin/timeout, which puts the helper and everything it starts
+#                  in a process group of their own and ends the whole group, TERM
+#                  and then KILL two seconds later
+#   a byte cap     /usr/bin/head -c on stdout and on stderr. A helper that keeps
+#                  printing past it is killed by SIGPIPE on its next write, so
+#                  what the shell holds is bounded whatever the helper does.
+#                  SIGPIPE is put back to its default for the helper first: a
+#                  parent that ignores it passes that on through exec, a shell
+#                  that starts with it ignored cannot undo it, and a helper run
+#                  that way writes on into the closed pipe until the deadline
+#
+# stdout passes through one byte past the cap, so the panel can tell an answer
+# that fitted from one that was cut off, and refuse the second rather than parse
+# half of it.
+#
+#   run-bounded <seconds> <max-stdout-bytes> <helper> [args...]
+#
+# <helper> is a name from the list below, never a path: this runs what ships
+# beside it in bin/ and nothing else. Exit: the helper's own status; 124 when the
+# deadline ended it, 137 when it had to be killed, 141 when it printed past the
+# cap; 2 for a call this refuses.
+set -uo pipefail
+
+[ "$#" -ge 3 ] || { printf 'usage: run-bounded <seconds> <max-stdout-bytes> <helper> [args...]\n' >&2; exit 2; }
+seconds="$1" cap="$2" helper="$3"
+shift 3
+
+case "$seconds" in ''|*[!0-9]*) printf 'run-bounded: bad deadline\n' >&2; exit 2 ;; esac
+case "$cap" in ''|*[!0-9]*) printf 'run-bounded: bad byte cap\n' >&2; exit 2 ;; esac
+[ "$seconds" -ge 1 ] && [ "$seconds" -le 600 ] || { printf 'run-bounded: deadline out of range\n' >&2; exit 2; }
+[ "$cap" -ge 1 ] && [ "$cap" -le 67108864 ] || { printf 'run-bounded: byte cap out of range\n' >&2; exit 2; }
+
+case "$helper" in
+  oc-profiles|sync-models.sh|read-catalog|read-templates) ;;
+  *) printf 'run-bounded: %s is not one of this plugin'"'"'s helpers\n' "$helper" >&2; exit 2 ;;
+esac
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Bytes on stderr are for the shell's log, and need no more room than an error.
+MAX_STDERR_BYTES=16384
+
+# env --default-signal arrived in coreutils 8.31; without it the cap still holds,
+# and only the early end falls back to the deadline.
+default_pipe=()
+/usr/bin/env --default-signal=PIPE /usr/bin/true 2>/dev/null && default_pipe=(/usr/bin/env --default-signal=PIPE)
+
+/usr/bin/timeout -k 2 "$seconds" "${default_pipe[@]}" /usr/bin/bash "$SELF_DIR/$helper" "$@" \
+    2> >(/usr/bin/head -c "$MAX_STDERR_BYTES" >&2) \
+  | /usr/bin/head -c "$((cap + 1))"
+rc=("${PIPESTATUS[@]}")
+exit "${rc[0]}"

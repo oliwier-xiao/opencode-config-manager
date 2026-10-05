@@ -52,17 +52,39 @@ open with `O_NOFOLLOW` and `O_NONBLOCK`, the type, owner and size judged on that
 descriptor rather than on the name, and only the bytes that were vouched for read back
 through it. Every file it writes goes through `bin/safe-write`: an `O_EXCL`,
 `O_NOFOLLOW`, mode 0600 temporary in the destination's own directory, fsync, rename,
-and an fsync of the directory. Everything it keeps — profiles, backups, the model cache —
-sits in folders `bin/private-dir` has shown to be private: created 0700, opened without
-following a link, owned by you, group and other bits cleared on that descriptor; the
-copies inside are 0600, and the scripts run under `umask 077`. A backup holds whatever
-your config holds, so it does not inherit the config's own mode: a 0644 config kept
-private by its 0700 folder would otherwise become a readable copy somewhere else.
-omarchy-shell is one process for the whole desktop, so
-nothing read on its behalf may block inside `open(2)` or be larger than it said it
-was. The one exception is `assets/templates.json`, which ships inside the plugin and
-is read by the shell's own `FileView`; anything able to rewrite that can rewrite the
-QML beside it.
+and an fsync of the directory.
+
+Nothing private goes on a command line. Every account on the machine can read a
+process's arguments through `/proc`, so a config's contents, a profile's name and id,
+the name of an agent and the folder a project lives in all reach the helpers on stdin,
+through a pipe, or in the environment, which only your own account can read; the only
+arguments are fixed verbs, and the repair codes of the plugin's own vocabulary. `test/argv.test.sh` plants a different marker in each of
+those places and fails if any command the plugin starts carries one.
+
+Every process the panel starts is `/usr/bin/bash` on `bin/run-bounded`, which runs one of
+four helpers that ship beside it, under a deadline that ends the helper and everything it
+started, and with a cap on what it may print — the shell never holds more than the cap.
+The environment is cleared and rebuilt from a fixed `PATH` of the system's own folders,
+`HOME` and the XDG folders, so nothing like `LD_PRELOAD`, `BASH_ENV` or `PYTHONPATH`
+reaches a helper or anything it runs, and each one starts in your home folder. The
+Python helpers run isolated (`python3 -I`). The shell opens no file itself, not even
+`assets/templates.json`: omarchy-shell is one process for the whole desktop, so nothing
+read on its behalf may block inside `open(2)` or be larger than it said it was. A
+helper's error output is not logged, since an error can quote the file it was reading.
+
+Every label sets `textFormat: Text.PlainText`, and names are flattened before they reach
+a shell component that would read them as markup — a profile name or a model name from
+the catalogue never renders as HTML or fetches an image. The desktop notification after
+a switch says only fixed words and a count. `test/panel.test.sh` holds all of this at
+the source: it fails on a process that keeps the shell's environment, a program found
+on `PATH`, a label left to guess its format, or a log line carrying what a helper printed.
+
+Everything it keeps — profiles, backups, the model cache — sits in folders
+`bin/private-dir` has shown to be private: created 0700, opened without following a
+link, owned by you, group and other bits cleared on that descriptor; the copies inside
+are 0600, and the scripts run under `umask 077`. A backup holds whatever your config
+holds, so it does not inherit the config's own mode: a 0644 config kept private by its
+0700 folder would otherwise become a readable copy somewhere else.
 
 ---
 
@@ -210,7 +232,10 @@ the Claude templates target Opus 5.5 and Sonnet 5.5.
 Opencode's TUI remembers the effort you last picked for a model (`~/.local/state/opencode/model.json`)
 and that memory outranks an agent's `variant`, so an applied profile's efforts can appear to be
 ignored. Applying a profile now clears the remembered effort for every model the profile names, and
-reverting restores it. Set `OC_CLEAR_EFFORT_MEMORY=0` to leave that file alone.
+reverting restores it. Only the `variant` entries for those models are touched; the file is never
+created, a link there is neither read nor written through, and a file that cannot be read or
+written leaves the switch to go ahead without it. Set `OC_CLEAR_EFFORT_MEMORY=0` to leave that file
+alone.
 
 Adding one saves it as a profile — nothing on disk changes until you switch to it, so you can read
 it and edit it first. A template needing a provider you have not connected is still listed, with
@@ -223,7 +248,10 @@ the missing one named on the row.
 ![The model picker](docs/panel-picker.png)
 
 The list comes from your own opencode, so it holds exactly what your keys can reach — connect a
-provider and its models appear here by themselves. Opening the panel refreshes a stale list in the
+provider and its models appear here by themselves. (It is built by running `opencode models` with
+the same cleared environment as every other helper, so a provider whose key lives only in an
+environment variable, rather than in opencode's own login or config, is not counted as reachable
+here. <kbd>Tab</kbd> still lists its models.) Opening the panel refreshes a stale list in the
 background (what you can reach is re-checked every few minutes, the full catalogue on
 `catalogRefreshHours`); <kbd>r</kbd>, middle-click or `refresh` over IPC force it now. Press <kbd>Tab</kbd> to search the whole
 models.dev catalogue instead, for when you are deciding which provider to add next. (That
@@ -252,11 +280,19 @@ the model you pinned to an agent.
 
 ## Switching, safely
 
-A switch rewrites only the keys a profile claims. Everything else in the file comes back with the
-same keys, in the same order, with the same values — your providers, your MCP servers, your plugin
-list, your API keys, your agent prompts. The edit is a splice into the text rather than a
-re-serialisation, so comments, indentation and blank lines survive it as well; a `.jsonc` is
-edited like any other file.
+A switch changes which model each agent runs on, and nothing else. In `opencode.json` that is
+`model`, `small_model`, and each agent's `model` and `variant`; in oh-my-openagent's config, each
+agent's and category's `model`, `models`, `variant`, `reasoning` and `fallback_models`. An agent's
+prompt, tools, permissions and every other setting stay as your file has them — whatever the
+profile was saved with — and so do agents the profile does not mention, which only lose a model the
+profile does not pin. Everything outside those keys comes back with the same keys, in the same
+order, with the same values: your providers, your MCP servers, your plugin list, your API keys.
+
+The edit is a splice into the text rather than a re-serialisation, so comments, indentation and
+blank lines outside the edited keys survive it; a `.jsonc` is edited like any other file. Inside an
+edited key — the `agent` block, say — the value is written out fresh, so a comment inside it does
+not come back. Each edit is read back before it is written, and a result that does not parse as
+exactly the document intended is refused rather than written.
 
 Before every switch it copies the files it is about to touch. **Restore the previous config** in the
 footer puts them back exactly as they were, and the undo is itself undoable.
@@ -337,8 +373,10 @@ it is signalled, and a server you are running is left alone.
 ./test/run.sh
 ```
 
-539 checks over the reader and writer, the model-cache sync, the hardening, the privacy of every folder and backup it keeps, the row model, the JSONC editor,
-shape detection, the write path, what `doctor` finds and `repair` puts right, and which profile counts as the running one.
+More than five hundred checks over the manifest, the reader and writer, the model-cache sync, the
+hardening, the command lines it starts, the privacy of every folder and backup it keeps, the row
+model, the JSONC editor, shape detection, the write path, what `doctor` finds and `repair` puts
+right, and which profile counts as the running one.
 One suite points outward: `upstream.test.sh` asserts what this plugin assumes about the two
 programs it sits between, against the copies actually installed — schema location, agent and
 category rosters, the refused-field list, and the built-in fallback. It is the suite that goes red
@@ -348,6 +386,11 @@ suite touched the config you actually use. The oh-my-openagent halves skip thems
 a machine that does not have it installed, and so does the QML suite where there is no Qt6
 `qml` to run it — that one splices functions straight out of the `.qml` files and executes
 them in a real QML engine, because the writers being right says nothing about the call sites.
+
+The same suite runs on every push to `main` and every pull request, in
+`.github/workflows/ci.yml`, on an Ubuntu runner that has neither opencode nor oh-my-openagent:
+the halves that need them skip and say so, and the run fails if fewer checks ran than a bare
+runner should manage.
 
 `./dev-sync.sh` copies the working tree into `~/.config/omarchy/plugins/` and restarts the
 shell — a bar widget already mounted in a slot keeps its old instance otherwise, so a
@@ -376,6 +419,9 @@ handle it, and pids get reused.)
 `bin/oc-profiles` is the whole of what writes — `detect`, `list`, `apply <id>`,
 `revert`, `backups` (full list under [From a terminal](#from-a-terminal)). It prints JSON
 and exits 0 for done, 2 for refused with nothing written, 3 for a partial write that was put back.
+The panel passes a profile's id and name in the environment (`OC_PROFILE_ID`,
+`OC_PROFILE_NAME`) and a profile's JSON on stdin, never as arguments; from a terminal the
+positional forms still work.
 
 ## Settings
 
@@ -386,7 +432,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | `barLabel` | Profile name | what sits next to the bar icon: the profile's short tag, the model, or nothing |
 | `afterSwitch` | Notify | see [Reloading opencode](#reloading-opencode) |
 | `confirmSwitch` | off | ask before switching. Off is the fast path the bar is for |
-| `manageOpencodeJson` | on | manage `model`, `small_model` and `agent` in `opencode.json` |
+| `manageOpencodeJson` | on | manage `model`, `small_model` and each agent's model in `opencode.json` |
 | `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — plus a file-level `fallback_models` on the legacy `oh-my-openagent.json`, where that key still exists. Off forces the plain-opencode view |
 | `keepBackups` | 10 | copies kept of each config file, oldest deleted past this. The one Undo needs is never pruned |
 | `catalogRefreshHours` | 24 | how often the models.dev catalogue is re-downloaded |
@@ -459,8 +505,9 @@ rather than anything being written into it. Folders and files an earlier release
 followed, and a file with a second hard link is left alone. Your own config keeps the
 mode you gave it.
 
-Nothing is written inside the plugin folder, and nothing is written to `~/.config/opencode` except
-the keys a profile claims.
+Nothing is written inside the plugin folder. Nothing is written to `~/.config/opencode` but the
+model fields described under [Switching, safely](#switching-safely), and nothing to opencode's own
+state but the remembered efforts described under [oh-my-openagent 5.x](#oh-my-openagent-5x).
 
 Profiles and the cached model list are read through the same `safe-read` ceiling described
 above — size and type judged on the opened descriptor, so a swapped-in symlink, FIFO or oversized

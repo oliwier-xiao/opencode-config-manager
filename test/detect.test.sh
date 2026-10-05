@@ -51,7 +51,14 @@ A=$(run "$D" detect)
 is "shape is opencode"            "$(jq -r .shape <<<"$A")"                 "opencode"
 is "ohMy.active false"            "$(jq -r .ohMy.active <<<"$A")"           "false"
 is "ohMy.stale false"             "$(jq -r .ohMy.stale <<<"$A")"           "false"
-is "opencode roster detected"     "$(jq -r '.roster.opencode.agents|length>0' <<<"$A")" "true"
+# opencode's roster comes from `opencode generate`, so it can only be read where
+# opencode is installed — a CI runner, for one, has none. upstream.test.sh skips its
+# opencode probes the same way.
+if command -v opencode >/dev/null 2>&1; then
+  is "opencode roster detected"   "$(jq -r '.roster.opencode.agents|length>0' <<<"$A")" "true"
+else
+  printf '  skip opencode roster detected (opencode is not installed)\n'
+fi
 is "no omo roster"                "$(jq -r '.roster.ohmy.agents|length' <<<"$A")"       "0"
 is "roster has no scout"          "$(jq -r '[.roster.opencode.agents[]|select(.=="scout")]|length' <<<"$A")" "0"
 

@@ -13,13 +13,18 @@ for f in "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json" \
 done
 
 rc=0
-for suite in "bash $REPO/test/safe-read.test.sh" \
+for suite in "bash $REPO/test/manifest.test.sh" \
+             "bash $REPO/test/safe-read.test.sh" \
              "bash $REPO/test/hardening.test.sh" \
+             "bash $REPO/test/argv.test.sh" \
+             "bash $REPO/test/bounded.test.sh" \
+             "bash $REPO/test/panel.test.sh" \
              "bash $REPO/test/private.test.sh" \
              "node $REPO/test/model.test.js" \
              "python3 $REPO/test/jsonc.test.py" \
              "bash $REPO/test/detect.test.sh" \
              "bash $REPO/test/write.test.sh" \
+             "bash $REPO/test/switch.test.sh" \
              "bash $REPO/test/effort.test.sh" \
              "bash $REPO/test/doctor.test.sh" \
              "bash $REPO/test/sync.test.sh" \

@@ -188,6 +188,74 @@ t("a fallback follows the spelling its own entry uses", () => {
   eq(p.targets[0].payload.agents.metis.fallback_models, [{ model: "google/gemini-3.1-pro-preview", variant: "high" }]);
 });
 
+console.log("\n--- a fallback chain comes back with everything each entry carried ---");
+const chain = () => ({ id: "o", name: "O", targets: [
+  { file: "ohmy", shape: "oh-my-openagent", manages: ["agents","categories"],
+    payload: { agents: {
+      oracle: { model: "anthropic/claude-opus-5", reasoning: "high", fallback_models: [
+        { model: "openai/gpt-5", reasoning: "medium", temperature: 0.2, thinking: { budget: 4000 } },
+        "google/gemini-3-flash",
+        { model: "xai/grok-5", variant: "low", providerOptions: { a: 1 } } ] },
+      single: { model: "anthropic/claude-opus-5", fallback_models: "openai/gpt-5" } },
+      categories: {} } } ] });
+t("a chain written as one string reads as a chain of one", () => {
+  eq(M.readFallbacks(chain().targets[0].payload.agents.single).map(f => f.model), ["openai/gpt-5"]);
+});
+t("and adding a second keeps the first instead of replacing it", () => {
+  let p = chain();
+  const row = omoRow(p, "single");
+  const list = M.readFallbacks(p.targets[0].payload.agents.single)
+    .concat([{ model: "google/gemini-3-flash", variant: "" }]);
+  p = M.setRowFallbacks(p, row, list);
+  eq(p.targets[0].payload.agents.single.fallback_models.map(f => f.model), ["openai/gpt-5", "google/gemini-3-flash"]);
+});
+t("reordering a chain keeps each entry's own settings and spelling", () => {
+  let p = chain();
+  const row = omoRow(p, "oracle");
+  const list = M.readFallbacks(p.targets[0].payload.agents.oracle);
+  p = M.setRowFallbacks(p, row, [list[2], list[0], list[1]]);
+  eq(p.targets[0].payload.agents.oracle.fallback_models, [
+    { model: "xai/grok-5", variant: "low", providerOptions: { a: 1 } },
+    { model: "openai/gpt-5", reasoning: "medium", temperature: 0.2, thinking: { budget: 4000 } },
+    { model: "google/gemini-3-flash" } ]);
+});
+t("removing one entry leaves its neighbours whole", () => {
+  let p = chain();
+  const list = M.readFallbacks(p.targets[0].payload.agents.oracle);
+  p = M.setRowFallbacks(p, omoRow(p, "oracle"), [list[0], list[2]]);
+  eq(p.targets[0].payload.agents.oracle.fallback_models[0].thinking, { budget: 4000 });
+  eq(p.targets[0].payload.agents.oracle.fallback_models[1].providerOptions, { a: 1 });
+});
+t("an entry changed to another model starts clean", () => {
+  let p = chain();
+  const list = M.readFallbacks(p.targets[0].payload.agents.oracle);
+  list[0] = Object.assign({}, list[0], { model: "anthropic/claude-haiku-4-5", variant: "" });
+  p = M.setRowFallbacks(p, omoRow(p, "oracle"), list);
+  eq(p.targets[0].payload.agents.oracle.fallback_models[0], { model: "anthropic/claude-haiku-4-5" });
+});
+t("changing an entry's effort keeps the rest of it", () => {
+  let p = chain();
+  const list = M.readFallbacks(p.targets[0].payload.agents.oracle);
+  list[0] = Object.assign({}, list[0], { variant: "high" });
+  p = M.setRowFallbacks(p, omoRow(p, "oracle"), list);
+  eq(p.targets[0].payload.agents.oracle.fallback_models[0],
+     { model: "openai/gpt-5", reasoning: "high", temperature: 0.2, thinking: { budget: 4000 } });
+});
+
+console.log("\n--- plain(): what reaches a shell component that reads markup ---");
+t("markup characters are gone", () => {
+  eq(M.plain('<img src="http://x/y.png">a & b'), 'img src="http://x/y.png" a b');
+});
+t("control characters and direction marks are gone", () => {
+  eq(M.plain("a\u0000b\u001bc\u202ed\u2066e\u200ff\u0085g"), "a b c d e f g");
+});
+t("runs of whitespace collapse, ends are trimmed", () => {
+  eq(M.plain("  a \n\t b  "), "a b");
+});
+t("null and undefined are empty, numbers are text", () => {
+  eq(M.plain(null), ""); eq(M.plain(undefined), ""); eq(M.plain(42), "42");
+});
+
 console.log("\n--- an effort never survives onto a model that has no efforts ---");
 // ProfileEditor.applyRowModel steps the effort down through Catalog.nearestVariant
 // before writing. It used to do that only for oh-my-openagent rows, so an opencode

@@ -1,4 +1,4 @@
-#!/usr/bin/env bash
+#!/usr/bin/bash
 # read-catalog — hands the model cache to the panel, or hands it nothing.
 #
 # The panel is not told the path and cannot pass one. Everything that makes this

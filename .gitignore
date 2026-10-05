@@ -11,3 +11,12 @@ __pycache__/
 .codegraph
 # Exported agent-session transcripts, dropped in the repo root by hand.
 session-*.md
+# Editor leftovers, kept out the same way the sibling plugins keep them out.
+*.swp
+*~
+# What a coding agent leaves in a working tree it was run in.
+.claude/
+.cursor/
+.codex/
+.gemini/
+.opencode/

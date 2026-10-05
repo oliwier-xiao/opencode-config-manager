@@ -40,8 +40,9 @@ probe(){ bash -c '
   eval "$(sed -n "/^mktemp_tracked()/,/^}/p;/^read_capped()/,/^}/p;/^omo_package_dir()/,/^}/p;/^omo_schema_file()/,/^}/p;/^omo_fields_json()/,/^}/p;/^omo_dts_enum()/,/^}/p;/^omo_category_names()/,/^}/p;/^ohmy_forbidden_for()/,/^}/p" "$1/bin/oc-profiles")"
   SELF_DIR="$1/bin"; MAX_PACKAGE_BYTES=67108864
   CACHE_HOME="${CACHE_HOME_OVERRIDE:-${XDG_CACHE_HOME:-$HOME/.cache}}"
-  # read_capped stages through mktemp_tracked, which writes into the run cache.
-  CACHE="${PROBE_CACHE:?}"; OC_RUN_TAG="probe-$$"
+  # read_capped stages through mktemp_tracked, which writes into the run cache under
+  # the prefix the script fixes at its top level, where its traps can see it.
+  CACHE="${PROBE_CACHE:?}"; OC_RUN_TAG="probe-$$"; OC_TEMP_PREFIX="$CACHE/.stage.$OC_RUN_TAG."
   OHMY_FORBIDDEN_AGENT='"'"'["models","provider"]'"'"'
   OHMY_FORBIDDEN_CATEGORY='"'"'["provider"]'"'"'
   OHMY_MODEL_KEYS='"'"'["models","provider","model","fallback_models"]'"'"'

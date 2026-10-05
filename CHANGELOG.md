@@ -1,5 +1,206 @@
 # Changelog
 
+## 1.5.2
+
+Nothing read out of a config goes on a command line, and nothing the panel starts runs
+on the shell's environment, without a deadline, or with an unbounded answer.
+
+### Fixed
+
+- **The E_BARE_AGENT_STRING repair no longer hands your whole `opencode.json` to another
+  process's argv.** It built its payload from the entire document and passed it to
+  `jsonc-edit` as `--payload <json>`. Every account on the machine can read every process's
+  arguments through `/proc/<pid>/cmdline`, so for as long as the splice ran, the provider
+  API keys and MCP tokens in that file were readable by any other local user
+  (CWE-214). Now:
+  - `jsonc-edit apply` reads its payload on stdin, capped at the same 4 MiB as a config,
+    and must get one JSON object. `--payload` is refused, so a caller still passing it
+    fails every time instead of leaking. A terminal on stdin is refused rather than
+    waited on.
+  - `write_projected` cuts the payload down to the managed keys before handing it over, so
+    a key that was never going to be written is never passed either.
+  - The repair carries only `agent`, and manages only `agent`. It used to preflight the
+    whole document too, so a `model` field inside a provider definition could refuse a
+    repair that never touches providers.
+- **No profile or agent content goes on jq's command line either.** `capture`, `save`,
+  `prefs`, the four repairs and their dry runs, the remembered-effort bookkeeping and
+  `backups` passed profile payloads, agent entries and before/after diffs to jq as
+  `--argjson`. They now go as a pipe jq reads like a file (`--slurpfile`), and only key
+  names, ids, paths, fingerprints and counts are arguments. This also lifts a limit: one
+  argument cannot be longer than 128 KiB, so capturing a config whose managed keys came
+  to more than that failed, with an `E_STORE` refusal that blamed the profile store.
+- **A refusal's message goes to jq on stdin.** `E_MODEL_SYNTAX` quotes the model string it
+  refused, and a key pasted into a model field by mistake is exactly the string that is
+  not a provider/model id.
+- **The profile the panel hands over stops at `oc-profiles`.** The panel now writes the
+  JSON for `save` and `prefs` to stdin. The environment form, kept for scripts, used to
+  stay exported, so every `jq`, `python3` and `flock` the command started inherited it;
+  it is now taken into plain shell variables before anything is started, and unset.
+- **No profile name, id, agent name or project folder goes on a command line either.**
+  The panel passed a profile's id to `apply`, `delete` and `repair`, and the name you
+  typed to `capture`, as arguments, and `oc-profiles` passed names, ids, agent names and
+  the project folders it walks to `jq --arg`. The panel now hands ids and names over in
+  `OC_PROFILE_ID` and `OC_PROFILE_NAME`; inside `oc-profiles`, every `--arg` and
+  `--argjson` value is moved into jq's environment (`$ENV`) before jq starts, so its
+  command line holds the program and the variable names only. The positional forms
+  still work from a terminal.
+- **`jsonc-edit` fails cleanly, and without quoting your config.**
+  - A payload or config nested a few hundred levels deep, or a string JSON will not
+    decode, is refused with exit 1 instead of a Python traceback.
+  - A malformed value is reported by its offset rather than quoted. The panel logs this
+    command's stderr, and the value was a piece of a file that holds keys.
+  - The result is written as UTF-8 whatever the locale. Under a latin-1 locale, or a
+    `PYTHONIOENCODING` that is not UTF-8, a config with one non-ASCII comment used to
+    come back re-encoded, or not at all.
+  - The payload is read whole before the file is opened, so a refusal never leaves the
+    caller writing into a pipe nobody reads. A reader that has gone ends it with exit 1
+    and no traceback.
+- **A killed run cleans up after itself, as the comments always said it did.** The temp
+  prefix the exit and signal traps remove was assigned inside `$( )`, so the traps held
+  an empty one and removed nothing. A run stopped by the 30-second timebox left its
+  staged copies of config documents, provider keys and MCP tokens included, in the cache
+  folder. The folder is private, but the copies were not meant to outlive the run. The
+  prefix is now fixed where the traps can see it, and `hardening.test.sh` checks that a
+  killed run leaves nothing.
+- **Only your own opencode sessions are counted or signalled.** `pgrep -x opencode`
+  matched every account's processes, so on a shared machine the panel counted other
+  people's sessions as running here, and a reload walked their `/proc` entries and tried
+  to signal them.
+
+- **Every process the panel starts is bounded, and starts clean.** Each is a
+  `HelperProcess`: `/usr/bin/bash` on the new `bin/run-bounded`, which runs one of the
+  four helpers that ship beside it — a fixed name, never a path — under
+  `/usr/bin/timeout -k`, which ends the helper and everything it started, and caps what
+  it prints at the producer end (`head -c`, the cap plus one byte on stdout and 16 KiB on
+  stderr), so the shell never buffers more than that. SIGPIPE is reset to its default
+  for the helper, so one that keeps printing past the cap ends on its next write even
+  when it was started from a parent that ignores the signal. The environment is cleared and
+  rebuilt from a fixed `PATH=/usr/bin:/bin`, `HOME`, the XDG folders and the plugin's own
+  settings; the working folder is `HOME`. A QML watchdog kills a helper that outlives its
+  own deadline, an answer longer than the cap is refused whole rather than truncated, and
+  a helper that cannot be started is reported as one instead of leaving the panel
+  waiting. Before, every process inherited the whole shell environment (`LD_PRELOAD`,
+  `BASH_ENV`, `PYTHONPATH`, a longer `PATH`) and its working folder, and read its output
+  unbounded.
+- **The shell opens no file itself.** `assets/templates.json` was read by the shell's own
+  `FileView`; it now goes through `bin/read-templates` and `safe-read` like every other
+  read. The notification runs `/usr/bin/notify-send` under `/usr/bin/timeout`, and a
+  config file is opened with `/usr/bin/xdg-open`, detached, each with a cleared
+  environment that keeps only the session bus and the display.
+- **A helper's error output is no longer logged.** A `jq` or Python error can quote a
+  fragment of the config it was reading, and the shell's log is the journal. The panel
+  logs the helper's name and exit status only.
+- **Helpers name their interpreters and find opencode by path.** Every shebang is
+  `/usr/bin/bash` or `/usr/bin/python3 -I`, and the inline Python runs as `python3 -I`.
+  The `opencode` binary has to resolve to a regular executable owned by you or root that
+  neither its group nor anyone else can write; it runs under `timeout`, in `HOME`, with a
+  `PATH` of its own folder and the system's. `curl -q` ignores a `.curlrc`.
+- **A switch changes models and nothing else.** Applying a profile wrote its whole
+  `agent` map over the config's: an agent the profile did not list was dropped, prompt,
+  tools and permissions with it, and whatever a profile carried besides models — a
+  prompt, a tool switch, a permission, from a template or a hand edit — was written into
+  the config. Now each agent in the config keeps every field but its model fields
+  (`model`, `variant`; for oh-my-openagent also `models`, `reasoning`,
+  `fallback_models`), which come from the profile or are removed; an agent only the
+  profile has gets its model fields and nothing else; and the config's agents keep their
+  order. A config that exists and cannot be read stops the switch.
+- **`jsonc-edit` writes nothing it has not read back.** Each key is one splice on the text
+  the previous splice produced, re-parsed in between: two deletions in one edit could
+  overlap and cut off a closing brace, a comment after the last member could swallow the
+  new comma, and a one-line object that lost its only member could be left unreadable.
+  Commas are parsed strictly (a missing one is a file that does not read; a trailing one,
+  which JSONC allows, is kept), a byte-order mark is kept, `NaN` is not JSON, and U+2028,
+  U+2029 and U+0085 stay inside their strings. The result must parse to exactly the
+  intended document, or the run fails and nothing is written.
+- **An undo writes only to a config file this plugin manages, named exactly.** The check
+  was a pattern, and `"$CFG_DIR"/*` also matches `"$CFG_DIR/../../.bashrc"`. Names in a
+  backup's manifest other than the two this script writes are skipped.
+- **Backups are pruned oldest first, also within one second.** A second backup in the same
+  second is `<stamp>-2`, and sorted with the slash `ls` appends, the older `<stamp>/` came
+  after it — so the newer of the two was deleted, and `backups` listed them out of order.
+- **A rollback that could not put everything back says so,** naming the folder holding
+  the copies, instead of reporting that the config was put back as it was.
+- **Updating a profile keeps what the capture does not cover:** its short name,
+  description and creation time, its place in the list, and a half (opencode or
+  oh-my-openagent) that was not recaptured this time.
+- **A fallback chain keeps what each entry carries.** A chain written as a single string
+  read as no chain, so adding a fallback replaced it; and reordering or removing an entry
+  rewrote its neighbours as bare `{model, effort}`, dropping a temperature, thinking
+  budget or provider options. Each entry is now rebuilt on what the file had while it is
+  the same model, in the spelling it used.
+- **`backups` lists under a home folder with a space in it.** `for d in $(...)` split
+  the path in two and listed nothing.
+- **A model-list sync stopped by a signal exits as one** (143) after removing what it had
+  staged, and the list already on disk is left whole.
+- **Text that reaches a shell component is flattened.** `Model.plain` removes markup
+  characters, control characters and direction marks, and now also covers the profile
+  name on the Update button and an error shown in the bar tooltip; the search
+  placeholder's counts are numbers; and the one remaining label without
+  `textFormat: Text.PlainText` has it.
+- **The repair code is checked before it becomes an argument,** against the shape of the
+  backend's own codes, and the notification's counts are numbers.
+
+### Tests
+
+- `test/bounded.test.sh`: `run-bounded` passes an answer within the cap through untouched,
+  cuts a flood off at the cap plus one byte and kills the helper, caps stderr, ends a
+  helper past its deadline together with what it started, runs only the four helpers by
+  name, refuses a malformed deadline or cap, and adds nothing to the environment.
+- `test/panel.test.sh`: the panel's rules held at the source — every process clears its
+  environment and names its program by path, no `FileView` and no parser outside
+  `HelperProcess.qml`, `execDetached` only in its object form with a cleared environment,
+  no `Qt.openUrlExternally`, every label `Text.PlainText`, helpers started with fixed
+  verbs only, a notification of fixed words and counts, a log line of a name and a
+  status, a fixed `PATH`, absolute shebangs. Each rule is shown to fail on a copy with
+  that one violation planted.
+- `test/switch.test.sh`: a switch keeps prompts, tools, permissions, MCP servers and
+  providers and writes the same file every time; the first backup gives back the
+  original bytes; a config that will not read is left alone; updating a profile keeps
+  what the capture does not cover; backups under a home with a space, and pruning
+  within one second; a first profile from a commented `.jsonc`; an opencode binary its
+  group could replace is not run; a sync stopped halfway leaves the old list whole.
+- `test/model.test.js`: fallback chains (a single string, reordering, removing, changing
+  an effort) and `plain()`.
+- `test/jsonc.test.py`: the splice cases above, and 1500 seeded random edits each read
+  back by an independent reader.
+- `test/argv.test.sh` also plants a profile name, text typed into the panel, an agent
+  name and a project folder, and runs capture, apply, delete and detect from the
+  environment.
+- `test/argv.test.sh` (50 checks where `strace` can trace, 40 where it cannot). It plants
+  a different secret in each place one lives: a provider key, an MCP header, `auth.json`,
+  `~/.opencode`, an oh-my-openagent key, an agent prompt, a profile payload, and a key
+  pasted into a model field. Then it runs every verb, including all four repairs (dry and
+  applied), apply, revert, save from the environment and from stdin, and a refusal. It
+  records the argv of every command started, through logging shims at the front of `PATH`,
+  and through `strace` when that is installed and allowed. Any planted secret in any argv
+  fails it. The recorder is shown to catch a secret passed as an argument, and the run is
+  shown to have reached `jsonc-edit apply`, so the suite cannot pass by recording nothing.
+  Against 1.5.1 it fails on exactly the line the marketplace review named. It also checks
+  that the panel's profile, handed over in the environment, reaches no command beyond the
+  ones that start `oc-profiles` itself.
+- `test/jsonc.test.py`: the payload goes in on stdin. `--payload` in both spellings is
+  refused, as are an empty, malformed or non-object payload and a terminal. A payload at
+  the cap lands whole, and one byte more is refused. Deep nesting in either the payload or
+  the config, and an undecodable string, fail without a traceback. A malformed value is
+  never quoted. The result is UTF-8 under an ASCII locale, and a reader that has gone
+  ends the run quietly.
+- `test/detect.test.sh` skips the opencode roster check when opencode is not installed, as
+  `upstream.test.sh` already did.
+- `test/manifest.test.sh` (27 checks). Every setting in `barWidget.schema` has a default
+  in `barWidget.defaults` that agrees with it, the keys match in both directions, and an
+  enum default is one of its options while an integer one sits inside `min..max`. The
+  manifest also passes the marketplace's own field limits, id rules and closed set of
+  kinds. Every entry point exists, the newest CHANGELOG entry is the manifest's version,
+  the README's install, update and remove commands name this plugin, and nothing tracked is
+  a symlink. Each rule is also run on a copy of the manifest broken in exactly that one way,
+  and must fail there.
+- CI, in `.github/workflows/ci.yml`, the same as the sibling plugins have, on every push to
+  `main` and every pull request. It runs a syntax pass over every script, `shellcheck`
+  (errors fail the run), the manifest test and the whole suite, on Ubuntu 24.04 with a
+  read-only token and a checkout pinned by commit. The runner has neither opencode nor
+  oh-my-openagent, so the suites that need them skip and say so. A last step fails the
+  run if fewer than 300 checks ran, so a suite that skipped itself away cannot pass green.
+
 ## 1.5.1
 
 Backups keep the privacy of the folder the config came from.

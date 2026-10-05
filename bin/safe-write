@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """safe-write — put stdin at a path, or leave the path as it was.
 
 The replacement is what the reviewer's bar asks of a write: an exclusive,
