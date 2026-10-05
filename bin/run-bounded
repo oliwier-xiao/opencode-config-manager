@@ -11,7 +11,11 @@
 #                  and then KILL two seconds later
 #   a byte cap     /usr/bin/head -c on stdout and on stderr. A helper that keeps
 #                  printing past it is killed by SIGPIPE on its next write, so
-#                  what the shell holds is bounded whatever the helper does
+#                  what the shell holds is bounded whatever the helper does.
+#                  SIGPIPE is put back to its default for the helper first: a
+#                  parent that ignores it passes that on through exec, a shell
+#                  that starts with it ignored cannot undo it, and a helper run
+#                  that way writes on into the closed pipe until the deadline
 #
 # stdout passes through one byte past the cap, so the panel can tell an answer
 # that fitted from one that was cut off, and refuse the second rather than parse
@@ -44,7 +48,12 @@ SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 # Bytes on stderr are for the shell's log, and need no more room than an error.
 MAX_STDERR_BYTES=16384
 
-/usr/bin/timeout -k 2 "$seconds" /usr/bin/bash "$SELF_DIR/$helper" "$@" \
+# env --default-signal arrived in coreutils 8.31; without it the cap still holds,
+# and only the early end falls back to the deadline.
+default_pipe=()
+/usr/bin/env --default-signal=PIPE /usr/bin/true 2>/dev/null && default_pipe=(/usr/bin/env --default-signal=PIPE)
+
+/usr/bin/timeout -k 2 "$seconds" "${default_pipe[@]}" /usr/bin/bash "$SELF_DIR/$helper" "$@" \
     2> >(/usr/bin/head -c "$MAX_STDERR_BYTES" >&2) \
   | /usr/bin/head -c "$((cap + 1))"
 rc=("${PIPESTATUS[@]}")

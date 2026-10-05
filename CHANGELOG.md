@@ -72,7 +72,9 @@ on the shell's environment, without a deadline, or with an unbounded answer.
   four helpers that ship beside it — a fixed name, never a path — under
   `/usr/bin/timeout -k`, which ends the helper and everything it started, and caps what
   it prints at the producer end (`head -c`, the cap plus one byte on stdout and 16 KiB on
-  stderr), so the shell never buffers more than that. The environment is cleared and
+  stderr), so the shell never buffers more than that. SIGPIPE is reset to its default
+  for the helper, so one that keeps printing past the cap ends on its next write even
+  when it was started from a parent that ignores the signal. The environment is cleared and
   rebuilt from a fixed `PATH=/usr/bin:/bin`, `HOME`, the XDG folders and the plugin's own
   settings; the working folder is `HOME`. A QML watchdog kills a helper that outlives its
   own deadline, an answer longer than the cap is refused whole rather than truncated, and
