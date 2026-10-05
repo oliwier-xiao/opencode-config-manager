@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """private-dir — make a folder this plugin owns private, show that it is, or refuse.
 
 A backup is a byte copy of a config, provider keys and MCP bearer tokens included,

@@ -23,6 +23,10 @@ BarWidget {
   readonly property string tier: panel ? panel.activeTier : "unknown"
   readonly property bool topTier: root.tier === "top"
 
+  // The shell's bar shows a widget's tooltip only while the widget says it is
+  // hovered; without this the hover tooltip never appears.
+  readonly property bool tooltipHovered: hoverArea.containsMouse
+
   // On a transparent bar the wallpaper is the backdrop: barForeground's luminance, not the bar background, decides the side.
   readonly property bool onDarkSurface:
     Palette.lumOf(root.bar ? root.bar.barForeground : Color.foreground) > 0.5
@@ -184,6 +188,7 @@ BarWidget {
     }
 
     MouseArea {
+      id: hoverArea
       anchors.fill: parent
       acceptedButtons: Qt.LeftButton | Qt.MiddleButton
       hoverEnabled: true

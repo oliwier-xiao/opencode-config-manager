@@ -20,6 +20,9 @@ Item {
   property bool showMeta: true
   property bool busy: false
   property bool isActiveProfile: false
+  // A save the backend refused, said where the user is looking: the list's error
+  // strip is behind this view while the editor is open.
+  property string errorMessage: ""
 
   property bool cursorActive: false
   property int selectedIndex: 0
@@ -617,12 +620,13 @@ Item {
           anchors.rightMargin: Style.spacing.md
           textFormat: Text.PlainText
           text: {
+            if (root.errorMessage !== "") return root.errorMessage
             var n = root.changes.length
             if (n === 0) return "Renamed"
             var body = n + (n === 1 ? " row changed" : " rows changed")
             return root.nameChanged ? body + ", renamed" : body
           }
-          color: root.foreground
+          color: root.errorMessage !== "" ? Color.urgent : root.foreground
           font.family: root.fontFamily
           font.pixelSize: Style.font.bodySmall
           elide: Text.ElideRight

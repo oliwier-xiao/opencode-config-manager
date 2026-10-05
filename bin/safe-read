@@ -1,4 +1,4 @@
-#!/usr/bin/env python3
+#!/usr/bin/python3 -I
 """safe-read — hand over a file's bytes, or hand over nothing.
 
 omarchy-shell is one process for the whole desktop, so anything read on its behalf
@@ -58,12 +58,13 @@ def read_capped(path, max_bytes, follow=False, allow_empty=True, label=None):
     except FileNotFoundError:
         raise
     except OSError as exc:
-        # ELOOP is O_NOFOLLOW refusing a symlink; ENXIO is a FIFO with no writer,
-        # which O_NONBLOCK turns into this instead of a stall.
+        # ELOOP is O_NOFOLLOW refusing a symlink. ENXIO is what open(2) answers for a
+        # socket. A FIFO is not refused here: under O_NONBLOCK it opens at once, writer
+        # or none, instead of stalling, and the fstat below turns it away.
         if exc.errno == errno.ELOOP:
             raise Refused("%s is a symlink" % what)
         if exc.errno == errno.ENXIO:
-            raise Refused("%s is a pipe, not a file" % what)
+            raise Refused("%s is a socket, not a file" % what)
         raise Refused("%s could not be opened: %s" % (what, exc.strerror))
 
     try:

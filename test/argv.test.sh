@@ -10,17 +10,21 @@
 # not see that; this suite records the argv of every command each verb starts and
 # fails on any that carries a planted secret.
 #
+# Not secrets only. What the user named — a profile, an agent — and the folder they
+# work in are theirs too, and a name or a path on a command line is as readable as a
+# key. Each of those gets a canary of its own below.
+#
 # Two recorders, because each covers what the other might not:
 #   shims   a directory at the front of PATH holding a logging wrapper for every
-#           command the scripts run by name. The helpers in bin/ are started by
-#           path, but their `#!/usr/bin/env python3` resolves python3 through PATH,
-#           so their argv is recorded too. Runs everywhere.
+#           command the scripts run by name. The python helpers name their
+#           interpreter absolutely, so the scripts are run from a copy of bin/ in
+#           which each helper is a wrapper that records its argv and then runs the
+#           real one. Runs everywhere.
 #   strace  every execve(2) of the whole process tree, whatever started it. Used
 #           when strace is installed and allowed to trace; skipped, and said so,
 #           when it is not.
 set -uo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-OC="$REPO/bin/oc-profiles"
 ROOT="$(mktemp -d)"; trap 'rm -rf "$ROOT"' EXIT
 pass=0; fail=0
 ok(){ printf '  ok   %s\n' "$1"; pass=$((pass+1)); }
@@ -40,7 +44,12 @@ K_OMO="sk-OMOPLUGIN-$SALT"
 K_AGENT="PROMPT-INSIDE-AN-AGENT-$SALT"
 K_PROFILE="PROMPT-INSIDE-A-PROFILE-$SALT"
 K_PASTED="sk-PASTED-INTO-A-MODEL-FIELD-$SALT"
-CANARIES=("$K_PROVIDER" "$K_MCP" "$K_AUTH" "$K_HOME" "$K_OMO" "$K_AGENT" "$K_PROFILE" "$K_PASTED")
+K_NAME="NAME-OF-A-PROFILE-$SALT"
+K_TYPED="NAME-TYPED-IN-THE-PANEL-$SALT"
+K_AGENTNAME="agent-named-by-the-user-$SALT"
+K_PROJECT="project-folder-$SALT"
+CANARIES=("$K_PROVIDER" "$K_MCP" "$K_AUTH" "$K_HOME" "$K_OMO" "$K_AGENT" "$K_PROFILE" "$K_PASTED"
+          "$K_NAME" "$K_TYPED" "$K_AGENTNAME" "$K_PROJECT")
 
 # ---------------------------------------------------------------- the shims
 
@@ -75,6 +84,23 @@ for c in jq python3 python bash sh env awk gawk sed grep head tail cut tr sort u
   command -v "$c" >/dev/null 2>&1 && ln -s .shim "$SHIMS/$c"
 done
 
+# The scripts, beside wrappers for the python helpers they start by path. Each wrapper
+# records its argv the way the shims do and then runs the real helper, which sits in a
+# folder of its own with its siblings (jsonc-edit loads safe-read from beside itself).
+BIN="$ROOT/bin"; REAL="$ROOT/real"; mkdir -p "$BIN" "$REAL"
+cp -a "$REPO/bin/." "$REAL/"
+rm -rf "$REAL/__pycache__"
+for h in oc-profiles sync-models.sh read-catalog read-templates run-bounded; do cp -a "$REAL/$h" "$BIN/$h"; done
+for h in safe-read safe-write private-dir jsonc-edit; do
+  cat > "$BIN/$h" <<WRAP
+#!/bin/bash
+{ printf '%s\037' "$h" "\$@"; printf '\n'; } >> "\$ARGV_LOG"
+exec /usr/bin/python3 "$REAL/$h" "\$@"
+WRAP
+  chmod +x "$BIN/$h"
+done
+OC="$BIN/oc-profiles"
+
 # ---------------------------------------------------------------- the world
 
 mk(){ local d="$ROOT/$1"; rm -rf "$d"
@@ -90,10 +116,15 @@ mk(){ local d="$ROOT/$1"; rm -rf "$d"
                        "headers": { "Authorization": "Bearer $K_MCP" } } },
   "agent": {
     "build": "anthropic/claude-sonnet-5",
-    "plan": { "model": "anthropic/claude-opus-5", "prompt": "$K_AGENT" }
+    "plan": { "model": "anthropic/claude-opus-5", "prompt": "$K_AGENT" },
+    "$K_AGENTNAME": "anthropic/claude-haiku-4-5"
   }
 }
 J
+  # A project of the user's own, with a config of its own: detect walks up from the
+  # folder it was started in and reports it.
+  mkdir -p "$d/home/$K_PROJECT/.opencode"
+  printf '{"model":"anthropic/claude-haiku-4-5"}' > "$d/home/$K_PROJECT/.opencode/opencode.json"
   # The unified oh-my-openagent config, holding all three shapes its repairs fix,
   # beside a key of its own that is none of this plugin's business.
   cat > "$d/omo/omo.jsonc" <<J
@@ -124,7 +155,7 @@ run(){ local d="$1"; shift
 
 # One profile carrying a secret-shaped value inside a managed key, and one whose
 # model field holds a pasted key — the value E_MODEL_SYNTAX quotes back.
-PROFILE_JSON="$(jq -cn --arg p "$K_PROFILE" '{id:"carried", name:"Carried", targets:[
+PROFILE_JSON="$(jq -cn --arg p "$K_PROFILE" --arg n "$K_NAME" '{id:"carried", name:$n, targets:[
   {file:"opencode", shape:"opencode", manages:["model","small_model","agent"],
    payload:{model:"anthropic/claude-opus-5",
             agent:{build:{model:"anthropic/claude-opus-5", prompt:$p}}}},
@@ -156,6 +187,8 @@ says '.ok'                      "detect answers"                 run "$D" detect
 says 'has("profiles")'          "list answers"                   run "$D" list
 says '.seeded'                  "seed captures the live config"  run "$D" seed
 says '.ok'                      "capture saves it again"         run "$D" capture "Mine" mine
+detect_in_project(){ ( cd "$D/home/$K_PROJECT" && run "$D" detect ); }
+says '.ok'                      "detect answers from inside a project" detect_in_project
 OC_PROFILE_JSON="$PROFILE_JSON" says '.ok' "save takes a profile from the environment" run "$D" save
 save_stdin(){ printf '%s' "$PROFILE_JSON" | run "$D" save; }
 says '.ok'                      "save takes one on stdin"        save_stdin
@@ -163,7 +196,8 @@ OC_PREFS_JSON='{"favorites":["anthropic/claude-opus-5"],"recents":[]}' \
   says '.ok'                    "prefs are saved"                run "$D" prefs
 says '.ok'                      "doctor answers"                 run "$D" doctor
 says '.dryRun'                  "the bare-string repair dry-runs"   run "$D" repair --fix E_BARE_AGENT_STRING
-says '.fixed == 1'              "and applies"                    run "$D" repair --fix E_BARE_AGENT_STRING --apply
+# Two bare strings: `build`, and the agent the user named.
+says '.fixed == 2'              "and applies"                    run "$D" repair --fix E_BARE_AGENT_STRING --apply
 says '.dryRun'                  "the live-models repair dry-runs"   run "$D" repair --fix E_MODELS_IN_CONFIG
 says '.fixed == 1'              "and applies"                    run "$D" repair --fix E_MODELS_IN_CONFIG --apply
 says '.dryRun'                  "the file-fallback repair dry-runs" run "$D" repair --fix E_FILE_FALLBACK
@@ -171,6 +205,11 @@ says '.fixed == 1'              "and applies"                    run "$D" repair
 says '.dryRun'                  "the profile repair dry-runs"    run "$D" repair --fix E_MODELS_IN_PROFILE --profile carried
 says '.fixed == 1'              "and applies"                    run "$D" repair --fix E_MODELS_IN_PROFILE --profile carried --apply
 says '.ok'                      "the profile applies"            run "$D" apply carried
+# The panel's way: what the user typed rides in the environment, never in argv.
+OC_PROFILE_NAME="$K_TYPED" says '.ok' "capture takes a typed name from the environment" run "$D" capture
+typed_id="$(run "$D" list 2>/dev/null | jq -r --arg n "$K_TYPED" '.profiles[] | select(.name == $n) | .id')"
+OC_PROFILE_ID="$typed_id" says '.ok' "apply takes an id from the environment" run "$D" apply
+OC_PROFILE_ID="$typed_id" says '.ok' "delete takes an id from the environment" run "$D" delete
 says 'length > 0'               "backups lists them"             run "$D" backups
 says '.ok'                      "revert puts the last one back"  run "$D" revert
 says '.ok'                      "reload answers"                 run "$D" reload
@@ -197,14 +236,15 @@ grep -q $'jsonc-edit\037apply' "$LOG" && ok "jsonc-edit apply was recorded" \
   || no "jsonc-edit apply was recorded" "no record of it — the shims missed the write path"
 grep -q $'^jq\037' "$LOG" && ok "jq was recorded" || no "jq was recorded" "no record of it"
 
-# The panel hands a profile over in the environment, which only this account can
-# read. Once read it is unset, so the only commands that may see it are the ones that
-# start oc-profiles itself: the shell its shebang names, and the timebox it re-runs
-# itself under. Through 1.5.1 every jq, python3 and flock it started had it too.
+# A profile handed over in the environment — which only this account can read — is
+# unset once read, so the only command that may see it is the one that starts
+# oc-profiles itself: the timebox it re-runs itself under. Through 1.5.1 every jq,
+# python3 and flock it started had it too. (The panel itself now pipes the profile
+# in on stdin; the environment is still accepted from a terminal.)
 echo "=== the environment hand-off stops at oc-profiles ==="
 seen="$(sort -u "$ENVLOG" | tr '\n' ' ')"
 case " $seen " in
-  *" bash "*) ok "the hand-off reached oc-profiles" ;;
+  *" timeout "*) ok "the hand-off reached oc-profiles" ;;
   *) no "the hand-off reached oc-profiles" "seen by: ${seen:-nothing}" ;;
 esac
 others="$(sort -u "$ENVLOG" | grep -vx -e bash -e timeout | tr '\n' ' ')"
@@ -233,6 +273,8 @@ else
     OC_AUTO_RELOAD=0 strace -f -qq -s 1048576 -e trace=execve -o "$TRACE.$#.$RANDOM" "$OC" "$@"; }
   trace "$D" detect >/dev/null 2>&1
   trace "$D" capture "Mine" mine >/dev/null 2>&1
+  OC_PROFILE_NAME="$K_TYPED" trace "$D" capture >/dev/null 2>&1
+  ( cd "$D/home/$K_PROJECT" && trace "$D" detect >/dev/null 2>&1 )
   OC_PROFILE_JSON="$PROFILE_JSON" trace "$D" save >/dev/null 2>&1
   trace "$D" doctor >/dev/null 2>&1
   trace "$D" repair --fix E_BARE_AGENT_STRING --apply >/dev/null 2>&1

@@ -74,7 +74,7 @@
         "type": "boolean",
         "label": "Manage opencode.json",
         "defaultValue": true,
-        "description": "The default model and any agents defined there. Everything else in the file — providers, MCP servers, plugins, keybinds — is left exactly as it was."
+        "description": "The default model, and the model each agent runs on. Everything else in the file — providers, MCP servers, plugins, keybinds, and each agent's prompt, tools and permissions — is left exactly as it was."
       },
       {
         "key": "manageOhMyOpenAgent",

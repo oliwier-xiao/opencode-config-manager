@@ -1,0 +1,23 @@
+#!/usr/bin/bash
+# read-templates — hands the panel the templates that ship with the plugin, or
+# hands it nothing.
+#
+# The same reader as bin/read-catalog, for the same reason: the panel never opens
+# a file itself. assets/templates.json sits in the plugin's own folder, but that
+# folder is as writable by this user as any other, and the read is the allocation —
+# a FIFO or an oversized file planted at the name must be refused before a byte of
+# it reaches omarchy-shell, not measured after it has. bin/safe-read opens the name
+# once, with O_NOFOLLOW and O_NONBLOCK, and decides on that descriptor.
+#
+# Exit: 0 printed it. 1 there is no such file. 2 refused it. 3 could not read it.
+
+set -uo pipefail
+
+SELF_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# The shipped file is a few kilobytes; this is room to grow, not a target. The
+# panel holds the same number.
+MAX_BYTES=1048576
+
+exec "$SELF_DIR/safe-read" "$SELF_DIR/../assets/templates.json" \
+  --max-bytes "$MAX_BYTES" --no-empty --label "the templates"

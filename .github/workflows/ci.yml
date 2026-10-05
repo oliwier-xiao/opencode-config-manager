@@ -48,7 +48,7 @@ jobs:
         # list of files has to be a loop. The Python helpers have no .py suffix, and
         # compile() leaves no __pycache__ behind in what is the installed plugin folder.
         run: |
-          for f in bin/oc-profiles bin/read-catalog bin/sync-models.sh dev-sync.sh test/*.sh; do
+          for f in bin/oc-profiles bin/read-catalog bin/read-templates bin/run-bounded bin/sync-models.sh dev-sync.sh test/*.sh; do
             bash -n "$f" || { echo "syntax error in $f"; exit 1; }
           done
           python3 -B - bin/jsonc-edit bin/safe-read bin/safe-write bin/private-dir test/jsonc.test.py <<'PY'
@@ -62,8 +62,8 @@ jobs:
         # Errors fail the run. Warnings are listed and do not: bin/oc-profiles carries a
         # dozen of them that predate this file.
         run: |
-          shellcheck -S error bin/oc-profiles bin/read-catalog bin/sync-models.sh dev-sync.sh test/*.sh
-          shellcheck -S warning bin/oc-profiles bin/read-catalog bin/sync-models.sh dev-sync.sh || true
+          shellcheck -S error bin/oc-profiles bin/read-catalog bin/read-templates bin/run-bounded bin/sync-models.sh dev-sync.sh test/*.sh
+          shellcheck -S warning bin/oc-profiles bin/read-catalog bin/read-templates bin/run-bounded bin/sync-models.sh dev-sync.sh || true
 
       - name: Manifest and its defaults
         # Also part of test/run.sh; run on its own first so a manifest mistake is the

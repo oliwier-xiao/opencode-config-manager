@@ -314,9 +314,11 @@ Item {
               anchors.leftMargin: Style.spacing.md
               anchors.rightMargin: Style.spacing.md
               height: root.rowHeight
+              // Numbers, made numbers here: the counts come out of a cache file, and a
+              // placeholder renders as rich text when what it is given looks like markup.
               placeholderText: root.effectiveScope === "reachable"
-                ? "Search " + (root.catalog ? root.catalog.reachableCount : 0) + " models you can use"
-                : "Search " + (root.catalog ? root.catalog.totalCount : 0) + " models"
+                ? "Search " + (root.catalog ? (Math.floor(Number(root.catalog.reachableCount)) || 0) : 0) + " models you can use"
+                : "Search " + (root.catalog ? (Math.floor(Number(root.catalog.totalCount)) || 0) : 0) + " models"
               foreground: root.foreground
               accent: root.accent
               font.family: root.fontFamily
