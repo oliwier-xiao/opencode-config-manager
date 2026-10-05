@@ -7,9 +7,23 @@ when you are just poking around. Click the bar to switch between them. Turn on *
 and a running session re-reads its config where it stands — nothing closes, nothing is lost. The
 conversation you are in keeps the model it started on; the switch lands on everything opened after it.
 
-| Install | Update | Remove |
-|---|---|---|
-| `omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git --enable` | `omarchy plugin update oliwier.opencode-configs` | `omarchy plugin remove oliwier.opencode-configs` |
+**Install**
+
+```bash
+omarchy plugin add https://github.com/oliwier-xiao/opencode-config-manager.git --enable
+```
+
+**Update**
+
+```bash
+omarchy plugin update oliwier.opencode-configs
+```
+
+**Remove**
+
+```bash
+omarchy plugin remove oliwier.opencode-configs
+```
 
 ![The bar widget](docs/bar.png)
 
