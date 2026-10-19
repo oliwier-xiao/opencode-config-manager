@@ -13,6 +13,7 @@ Item {
 
   property var profile: null                // working copy, edited in place here
   property var original: null               // what it looked like when the editor opened
+  property var modelView: null              // the panel's Model.viewFor(detected)
   property var catalog: null
   property var catalogIndex: ({})
   property var favorites: []
@@ -36,9 +37,9 @@ Item {
   readonly property color muted: Util.alpha(foreground, 0.66)
   readonly property color veryMuted: Util.alpha(foreground, 0.45)
 
-  readonly property var rows: root.profile ? Model.rowsFor(root.profile) : []
+  readonly property var rows: root.profile ? Model.rowsFor(root.profile, root.modelView) : []
   readonly property var changes: (root.profile && root.original)
-    ? Model.changedRows(root.original, root.profile) : []
+    ? Model.changedRows(root.original, root.profile, root.modelView) : []
   readonly property bool nameChanged: root.profile && root.original
     && (root.profile.name !== root.original.name || root.profile.shortName !== root.original.shortName)
   readonly property bool dirty: root.changes.length > 0 || root.nameChanged
@@ -237,7 +238,7 @@ Item {
       if (row.group === "default") return ""
       if (!row.variant) return ""
       return Catalog.nearestVariant(index, id, row.variant)
-    }))
+    }, root.modelView))
   }
 
   // ---- Header ------------------------------------------------------------

@@ -21,20 +21,18 @@ t("roster never contains 'scout'", () => {
   assert(M.rowsFor(ocProfile()).every(r => r.key !== "scout"));
 });
 
-console.log("\n--- setRoster: detected roster replaces the fallback ---");
+console.log("\n--- viewFor: a detected roster replaces the fallback ---");
 t("detected opencode roster is used", () => {
-  M.setRoster({ opencode: { agents: ["plan","build","general","explore","title","summary","compaction"] } });
-  const keys = M.rowsFor(ocProfile()).filter(r => r.group === "agent").map(r => r.key);
+  const v = M.viewFor({ shape: "opencode", roster: { opencode: { agents: ["plan","build","general","explore","title","summary","compaction"] } } });
+  const keys = M.rowsFor(ocProfile(), v).filter(r => r.group === "agent").map(r => r.key);
   eq(keys, ["build","my-reviewer","plan","general","explore","title","summary","compaction"]);
 });
 t("empty detected roster does not blank the panel", () => {
-  const before = M.roster().opencode.agents.slice();
-  M.setRoster({ opencode: { agents: [] } });
-  eq(M.roster().opencode.agents, before);
+  eq(M.viewFor({ roster: { opencode: { agents: [] } } }).opencodeAgents, M.roster().opencode.agents);
 });
 t("detected ohmy roster is used", () => {
-  M.setRoster({ ohmy: { agents: ["sisyphus","oracle"], categories: ["deep","quick"] } });
-  const rows = M.rowsFor(omProfile());
+  const v = M.viewFor({ shape: "oh-my-openagent", roster: { ohmy: { agents: ["sisyphus","oracle"], categories: ["deep","quick"] } } });
+  const rows = M.rowsFor(omProfile(), v);
   eq(rows.filter(r=>r.group==="agent").map(r=>r.key), ["librarian","sisyphus","oracle"]);
   eq(rows.filter(r=>r.group==="category").map(r=>r.key), ["deep","quick"]);
 });
@@ -110,29 +108,46 @@ t("junk in place of a store is not an active profile", () => {
   eq(M.resolveActiveId({ profiles: "not a list", matches: "not a list" }), "");
 });
 
-console.log("\n--- setRoster/setShape report whether a repaint is owed ---");
-t("a shape that did not move reports no change", () => {
-  M.setShape("opencode");
-  assert.strictEqual(M.setShape("opencode"), false);
-  assert.strictEqual(M.setShape("oh-my-openagent"), true);
-  assert.strictEqual(M.setShape("oh-my-openagent"), false);
+console.log("\n--- every panel draws against its own detect, never another's ---");
+// Model.js is one .pragma library shared by every panel, and there is a panel per
+// monitor. The shape used to be a global in it: the second panel to hear back was
+// told nothing had moved, and kept opencode's "2 of 9 pinned" under a heading that
+// said oh-my-openagent.
+const omoDetect = () => ({ shape: "oh-my-openagent",
+  roster: { opencode: { agents: [] }, ohmy: { agents: ["sisyphus","oracle"], categories: ["quick"] } } });
+const plainDetect = () => ({ shape: "opencode", roster: { opencode: { agents: [] } } });
+const both = () => ({ id: "b", name: "B", targets: [
+  { file: "ohmy", shape: "oh-my-openagent", manages: ["agents","categories"],
+    payload: { agents: { sisyphus: { model: "anthropic/claude-opus-5" } }, categories: {} } },
+  { file: "opencode", shape: "opencode", manages: ["model","small_model"],
+    payload: { model: "anthropic/claude-opus-5", small_model: "anthropic/claude-haiku-4-5" } } ] });
+t("an oh-my-openagent answer draws its own agents and categories, then the base", () => {
+  eq(M.rowsFor(both(), M.viewFor(omoDetect())).map(r => r.file + ":" + r.key),
+     ["ohmy:sisyphus","ohmy:oracle","ohmy:quick","opencode:model","opencode:small_model"]);
+  eq(M.summary(both(), M.viewFor(omoDetect())), "3 of 5 pinned · claude-opus-5, claude-haiku-4-5");
 });
-t("an empty or absent shape is not a change", () => {
-  M.setShape("opencode");
-  assert.strictEqual(M.setShape(""), false);
-  assert.strictEqual(M.setShape(null), false);
-  eq(M.shape(), "opencode");
+t("two panels answering in either order each keep their own count", () => {
+  const a1 = M.viewFor(omoDetect()), b1 = M.viewFor(plainDetect());
+  const b2 = M.viewFor(plainDetect()), a2 = M.viewFor(omoDetect());
+  for (const a of [a1, a2]) eq(M.summary(both(), a), "3 of 5 pinned · claude-opus-5, claude-haiku-4-5");
+  for (const b of [b1, b2]) eq(M.summary(both(), b), "2 of 9 pinned · claude-opus-5, claude-haiku-4-5");
 });
-t("the same roster twice reports no change", () => {
-  const r = { opencode: { agents: ["build", "plan"] },
-              ohmy: { agents: ["oracle"], categories: ["deep"] } };
-  M.setRoster(r);
-  assert.strictEqual(M.setRoster(r), false);
-  assert.strictEqual(M.setRoster({ opencode: { agents: ["build", "plan", "explore"] } }), true);
+t("before any answer a panel draws plain opencode on the built-in roster", () => {
+  const v = M.viewFor(null);
+  eq(v.shape, "opencode");
+  eq([v.opencodeAgents, v.ohmyAgents, v.ohmyCategories],
+     [M.roster().opencode.agents, M.roster().ohmy.agents, M.roster().ohmy.categories]);
 });
-t("a roster the probe could not read is not a change", () => {
-  assert.strictEqual(M.setRoster({ opencode: { agents: [] } }), false);
-  assert.strictEqual(M.setRoster(null), false);
+t("a probe that found nothing falls back; one that found something does not", () => {
+  const v = M.viewFor({ roster: { ohmy: { agents: [], categories: ["writing"] } } });
+  eq(v.ohmyAgents, M.roster().ohmy.agents);
+  eq(v.ohmyCategories, ["writing"]);
+});
+t("a view is a copy: editing one reaches neither the fallback nor the answer", () => {
+  const det = omoDetect(), v = M.viewFor(det), w = M.viewFor(null);
+  v.ohmyAgents.push("x"); w.opencodeAgents.push("x");
+  eq(det.roster.ohmy.agents, ["sisyphus","oracle"]);
+  assert(M.roster().opencode.agents.indexOf("x") < 0);
 });
 
 console.log("\n--- oh-my-openagent 4.19: `reasoning` is the current spelling of `variant` ---");

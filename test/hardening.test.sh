@@ -198,38 +198,43 @@ qml_lacks "ProfileEditor.qml" 'root.rows[index].file === "ohmy" ? root.rows[inde
 qml_has  "ProfileEditor.qml" "Catalog.nearestVariant(root.catalogIndex, modelId, wanted)" \
          "through the catalogue, not by hand"
 
-# Before detect answers, Model.roster() is the built-in fallback: four opencode agents,
-# so every profile summarises as "2 of 6 pinned" whatever it really holds. The header
+# Before detect answers, the panel's view is the built-in fallback, plain opencode,
+# so every profile summarises as "2 of 9 pinned" whatever it really holds. The header
 # says "READING WHAT IS ON DISK" instead; the rows under it must not contradict it.
-qml_has  "ProfileList.qml" "root.ready ? Model.summary(modelData)" \
+qml_has  "ProfileList.qml" "root.ready ? Model.summary(modelData, root.modelView)" \
          "a profile row waits for the roster before it counts anything"
 
 # The bar down the left of a profile row answers "which one is running" first, and
 # groups the rest by provider second. Losing either half is a silent regression.
 qml_has  "ProfileList.qml" "rowItem.isActive" \
          "the running profile still gets the accent"
-qml_has  "ProfileList.qml" "Palette.dominantProvider(Model.rowsFor(modelData))" \
+qml_has  "ProfileList.qml" "Palette.dominantProvider(Model.rowsFor(modelData, root.modelView))" \
          "and the others take the tint of the provider they are mostly on"
-# rowsFor reads the shape out of a .pragma library global, so this binding needs the
-# same counter the summary beside it reads. Without it the bar is coloured off six
-# opencode rows and never recounted: a profile whose base model is on one provider
-# and whose agents are on another wears the wrong colour for the session.
-qml_has_flat "ProfileList.qml" \
-         "readonly property string provider: { root.shapeGeneration return Palette.dominantProvider(Model.rowsFor(modelData)) }" \
-         "counted against the roster that arrived, not the one it was drawn with"
 
-# setRoster and setShape write globals in a .pragma library, which no binding can
-# watch. A row that read Model.summary() before detect answered kept the built-in
-# four-agent roster for good — "2 of 6 pinned" on a profile holding twenty-four.
-qml_has  "Panel.qml" "if (rosterMoved || shapeMoved) root.shapeGeneration++" \
-         "the panel counts every roster or shape move"
-qml_has  "ProfileList.qml" "root.shapeGeneration" \
-         "and the summaries depend on that count"
-# Model.js is a .pragma library: setShape writes a global no binding depends on,
-# and `list` beats `detect` every time, so without this the first paint keeps the
-# wrong shape until something unrelated invalidates it.
-qml_has  "Panel.qml" "root.store = Model.clone(root.store)" \
-         "a shape that moved forces the rows to be drawn again"
+# Model.js is a .pragma library, so every panel — one per bar, a bar per monitor —
+# shares one copy of it. The shape and the rosters used to be globals in it that each
+# detect wrote, and only the first panel to hear back was told they had moved: the
+# second kept rows drawn against opencode's roster, "2 of 9 pinned", under a heading
+# that said oh-my-openagent. Each panel now draws against a view of its own answer.
+qml_has  "Panel.qml" "readonly property var modelView: Model.viewFor(root.detected)" \
+         "each panel draws against the answer its own detect gave"
+is "and hands that view to both the list and the editor" \
+   "$(grep -cF 'modelView: root.modelView' "$REPO/Panel.qml")" "2"
+UNVIEWED="$(cd "$REPO" && python3 - <<'PY'
+import glob, re
+fns = r"Model\.(rowsFor|summary|dominantModel|distinctModels|isUniform|agentCount|changedRows|setAllModels)\("
+for f in sorted(glob.glob("*.qml")):
+    s = open(f, encoding="utf-8").read()
+    for m in re.finditer(fns, s):
+        i, d = m.end(), 1
+        while d and i < len(s):
+            d += {"(": 1, ")": -1}.get(s[i], 0); i += 1
+        if "root.modelView" not in s[m.end():i - 1]:
+            print("%s:%d %s" % (f, s.count("\n", 0, m.start()) + 1, m.group(0)))
+PY
+)"
+[ -z "$UNVIEWED" ] && ok "every row, count and colour is drawn against the panel's own view" \
+                   || no "every row, count and colour is drawn against the panel's own view" "$(printf '%s' "$UNVIEWED" | tr '\n' ' ')"
 qml_has  "ProfileList.qml" 'if (!root.ready) return "READING WHAT IS ON DISK"' \
          "the heading waits before claiming nothing matches"
 qml_has  "ProfileList.qml" "(root.drift && root.ready)" \
