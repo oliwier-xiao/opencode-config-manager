@@ -36,6 +36,13 @@ for suite in "bash $REPO/test/manifest.test.sh" \
   $suite || rc=1
 done
 
+# The marketplace's security baseline needs its scanner, which is not vendored: it runs
+# only when OC_MKT_SCRIPTS names a folder holding it (see the header of baseline.sh).
+if [ -n "${OC_MKT_SCRIPTS:-}" ]; then
+  printf '\n=== %s\n' "baseline.sh"
+  bash "$REPO/test/baseline.sh" "$OC_MKT_SCRIPTS" || rc=1
+fi
+
 after=""
 for f in "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/opencode.json" \
          "${XDG_CONFIG_HOME:-$HOME/.config}/opencode/oh-my-openagent.json" \

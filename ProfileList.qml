@@ -18,11 +18,10 @@ Item {
   // says about the running config is a claim about disk, and before the second half
   // lands the panel does not yet know enough to make one.
   property bool ready: true
-  // Model.js keeps the roster and the shape in globals a binding cannot watch, so
-  // the panel counts the moves and every summary below reads the count. Without it
-  // a row keeps whatever it was first drawn with, which before detect answers is
-  // the built-in four-agent roster.
-  property int shapeGeneration: 0
+  // The panel's Model.viewFor(detected): which shape and rosters every count and
+  // colour below is drawn against. A property, so each of them redraws when this
+  // panel's own detect answers — before then it is the built-in opencode roster.
+  property var modelView: null
   property bool drift: false
   property bool busy: false
   property string shapeName: ""
@@ -59,7 +58,7 @@ Item {
       var p = root.profiles[i]
       if (String(p.name || "").toLowerCase().indexOf(q) >= 0
           || String(p.id || "").toLowerCase().indexOf(q) >= 0
-          || Model.summary(p).toLowerCase().indexOf(q) >= 0) out.push(p)
+          || Model.summary(p, root.modelView).toLowerCase().indexOf(q) >= 0) out.push(p)
     }
     return out
   }
@@ -75,7 +74,7 @@ Item {
   readonly property bool searchable: root.profiles.length >= 8
 
   readonly property string activeTier: activeProfile
-    ? Palette.profileTier(Model.rowsFor(activeProfile), root.catalogIndex) : "unknown"
+    ? Palette.profileTier(Model.rowsFor(activeProfile, root.modelView), root.catalogIndex) : "unknown"
 
   // The height this screen wants: a fixed one leaves empty card under a short list, which reads as a failed load.
   readonly property int desiredHeight:
@@ -143,8 +142,7 @@ Item {
         // say what is actually happening instead of asserting the worst case.
         if (!root.ready) return "READING WHAT IS ON DISK"
         if (!root.activeProfile) return "NO PROFILE MATCHES WHAT IS ON DISK"
-        root.shapeGeneration    // same dependency: the count is read off the roster
-        return Model.plain(Model.summary(root.activeProfile).toUpperCase())
+        return Model.plain(Model.summary(root.activeProfile, root.modelView).toUpperCase())
       }
       detail: root.shapeName
 
@@ -580,16 +578,13 @@ Item {
         // provider — so a list of a dozen profiles groups by eye instead of reading
         // as one grey column. A profile on no single provider gets the muted
         // fallback, which is what the bar looked like before any of this.
-        // Counted off rowsFor, which reads the shape out of a .pragma library global —
-        // so this needs the same dependency the summary beside it has. Without it the
-        // bar keeps the answer it was drawn with, and before detect answers that is
-        // six opencode rows rather than the twenty-four the profile holds: a profile
-        // whose base model is on one provider and whose agents are on another takes
-        // the base model's colour and never lets go of it.
-        readonly property string provider: {
-          root.shapeGeneration
-          return Palette.dominantProvider(Model.rowsFor(modelData))
-        }
+        // Counted against the panel's own view, like the summary beside it. Counted
+        // against anything else, the bar keeps the answer it was first drawn with —
+        // before detect answers that is the opencode rows rather than the twenty-four
+        // the profile holds: a profile whose base model is on one provider and whose
+        // agents are on another takes the base model's colour and never lets go of it.
+        readonly property string provider:
+          Palette.dominantProvider(Model.rowsFor(modelData, root.modelView))
         color: rowItem.isActive
           ? root.accent
           : Palette.providerTint(provider, root.accent, Color.popups.background, root.veryMuted)
@@ -616,7 +611,7 @@ Item {
             id: tierDot
             anchors.verticalCenter: parent.verticalCenter
             readonly property string tier:
-              Palette.profileTier(Model.rowsFor(modelData), root.catalogIndex)
+              Palette.profileTier(Model.rowsFor(modelData, root.modelView), root.catalogIndex)
             visible: tier !== "unknown"
             width: Style.space(5)
             height: width
@@ -683,10 +678,7 @@ Item {
           // rows under it were asserting a count off the built-in roster, which is
           // four agents wide. That is where "2 of 6 pinned" came from on a profile
           // that has twenty-four rows the moment detect answers.
-          text: {
-            root.shapeGeneration    // a dependency, so this re-reads when the roster moves
-            return root.ready ? Model.summary(modelData) : "reading what is on disk"
-          }
+          text: root.ready ? Model.summary(modelData, root.modelView) : "reading what is on disk"
           color: root.muted
           font.family: root.fontFamily
           font.pixelSize: Style.font.caption

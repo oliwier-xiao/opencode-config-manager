@@ -1,5 +1,42 @@
 # Changelog
 
+## 1.5.3
+
+Every panel draws against its own reading of what is installed, and the free templates
+name models that still exist.
+
+### Fixed
+
+- **The panel lists oh-my-openagent's agents again on a machine with more than one
+  monitor.** Every bar gets its own copy of the panel, and all of them share
+  `lib/Model.js`, a `.pragma library`. The running shape lived there as a global each
+  panel's `detect` wrote, and only the first panel to hear back was told it had moved:
+  the others kept rows drawn against opencode's own roster — "2 of 9 pinned", `build`,
+  `compaction`, `title` — under a heading that said oh-my-openagent. Each panel now
+  draws against `Model.viewFor()` of its own `detect` answer, so the heading and the
+  rows cannot disagree.
+- **The two free templates name models the catalogue still has.** OpenCode Zen dropped
+  `opencode/ling-3.0-flash-fin-free`; **Free** reads with `opencode/deepseek-v4.1-flash-free`
+  in its place. OpenRouter dropped `openrouter/qwen/qwen3.8-27b:free`, and no free model
+  that is left there offers `xhigh`: in **Free (OpenRouter)** Momus thinks on Inkling Small
+  at `max`, and the chains Qwen backed fall back to Nemotron Ultra at `high`, or to Inkling
+  Small at `max` where Nemotron Ultra already stands.
+
+### Tests
+
+- `test/model.test.js` and `test/qml.test.sh`: two panels sharing `Model.js`, answering
+  in either order, each keep their own count — the second in a real QML engine, against
+  the binding Panel.qml ships, and shown to fail when a panel ignores its own answer.
+- `test/hardening.test.sh`: every row, count and colour in the QML is drawn against the
+  panel's own view.
+- `test/upstream.test.sh`: the probe defines `MAX_CONFIG_BYTES`, which the package lookup
+  has read since 1.5.2. Without it the lookup failed, and `models` read as refused on an
+  agent of an oh-my-openagent whose schema declares it there.
+- `test/baseline.sh`: the marketplace's Automated Security Baseline, run on the committed
+  tree. It expects `passed` with no finding and no capability, the result every listed
+  commit of this plugin has had. `test/run.sh` runs it when `OC_MKT_SCRIPTS` names a
+  folder holding the scanner.
+
 ## 1.5.2
 
 Nothing read out of a config goes on a command line, and nothing the panel starts runs

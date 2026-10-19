@@ -519,6 +519,80 @@ else
   no "Panel.takeReadRefusal can be found" "extraction failed — was it renamed?"
 fi
 
+# ---- every panel draws against its own detect ---------------------------------
+
+# There is a panel per bar and a bar per monitor, and all of them import the same
+# .pragma library. The shape used to be a global in it: the second panel to hear back
+# was told nothing had moved and kept "2 of 9 pinned", opencode's roster, under a
+# heading that said oh-my-openagent. The binding below is the one Panel.qml ships.
+echo "=== two panels share Model.js, and neither draws against the other's answer ==="
+VIEWLINE="$(grep -m1 -F 'readonly property var modelView:' "$REPO/Panel.qml" | sed 's/^ *//')"
+if [ -n "$VIEWLINE" ]; then
+  ok "Panel's modelView binding extracted from the shipped file"
+  cat > "$T/PanelLike.qml" <<QML
+import QtQuick
+import "lib/Model.js" as Model
+Item {
+  id: root
+  property var detected: null
+  property var profile: null
+  $VIEWLINE
+  readonly property string summary: root.profile ? Model.summary(root.profile, root.modelView) : ""
+}
+QML
+  cat > "$T/TwoPanels.qml" <<'QML'
+import QtQuick
+Item {
+  id: top
+  property int failed: 0
+  function check(c) { if (!c) top.failed++ }
+  function both() {
+    return { id: "b", name: "B", targets: [
+      { file: "ohmy", shape: "oh-my-openagent", manages: ["agents","categories"],
+        payload: { agents: { sisyphus: { model: "anthropic/claude-opus-5" } }, categories: {} } },
+      { file: "opencode", shape: "opencode", manages: ["model","small_model"],
+        payload: { model: "anthropic/claude-opus-5", small_model: "anthropic/claude-haiku-4-5" } } ] }
+  }
+  function omo() {
+    return { shape: "oh-my-openagent", roster: { opencode: { agents: [] },
+             ohmy: { agents: ["sisyphus","oracle"], categories: ["quick"] } } }
+  }
+  function plain() { return { shape: "opencode", roster: { opencode: { agents: [] } } } }
+  Component.onCompleted: {
+    try {
+      var c = Qt.createComponent("PanelLike.qml")
+      var a = c.createObject(top, { profile: both() })
+      var b = c.createObject(top, { profile: both() })
+      // Nothing answered yet: both draw plain opencode.
+      check(a.summary.indexOf("2 of 9 pinned") === 0)
+      // b hears back first, then a.
+      b.detected = plain()
+      a.detected = omo()
+      check(a.summary.indexOf("3 of 5 pinned") === 0)
+      check(b.summary.indexOf("2 of 9 pinned") === 0)
+      // Both answer again, the other way round, with nothing new to say — the
+      // second answer is the one the global used to read as "nothing moved".
+      a.detected = omo()
+      b.detected = plain()
+      check(a.summary.indexOf("3 of 5 pinned") === 0)
+      check(b.summary.indexOf("2 of 9 pinned") === 0)
+    } catch (err) { top.failed = 99 }
+    Qt.exit(top.failed)
+  }
+}
+QML
+  QT_QPA_PLATFORM=offscreen timeout 60 "$QMLBIN" "$T/TwoPanels.qml" >/dev/null 2>&1 \
+    && ok "each panel counts against its own answer, whichever order they arrive in" \
+    || no "each panel counts against its own answer, whichever order they arrive in" "rc=$?"
+  # A test that cannot fail proves nothing: a panel blind to its own answer must fail it.
+  sed -i 's/readonly property var modelView: .*/readonly property var modelView: null/' "$T/PanelLike.qml"
+  QT_QPA_PLATFORM=offscreen timeout 60 "$QMLBIN" "$T/TwoPanels.qml" >/dev/null 2>&1 \
+    && no "a panel that ignores its own detect fails this suite" "it passed — the assertion does not test the fix" \
+    || ok "a panel that ignores its own detect fails this suite"
+else
+  no "Panel's modelView binding can be found" "extraction failed — was it renamed?"
+fi
+
 printf '\n%d passed' "$pass"
 [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"
 printf '\n'

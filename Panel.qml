@@ -127,9 +127,10 @@ Panel {
   property var detected: null
   property var catalog: Catalog.empty()
   property var catalogIndex: ({})
-  // Bumped whenever Model's roster or shape moves. Model.js is a .pragma library:
-  // those live in globals that no binding can watch, so this is the watchable thing.
-  property int shapeGeneration: 0
+  // What every row in this panel is drawn against: the shape and rosters this
+  // panel's own detect answered (see Model.viewFor). Derived, so each binding that
+  // reads it is redrawn when detect lands, and never by another panel's answer.
+  readonly property var modelView: Model.viewFor(root.detected)
   property bool catalogSyncTried: false
   // An `r` pressed while a background sync is already in flight. It cannot be
   // handed to that run — Quickshell fixes a Process's environment at spawn, so
@@ -201,11 +202,11 @@ Panel {
     var s = String(activeProfile.shortName || "")
     return s !== "" ? s : Model.autoShortName(activeProfile.name)
   }
-  readonly property string activeModel: activeProfile ? Model.shortModel(Model.dominantModel(activeProfile)) : ""
+  readonly property string activeModel: activeProfile ? Model.shortModel(Model.dominantModel(activeProfile, root.modelView)) : ""
   // What the running profile costs, as one of five words. The bar reads this
   // to decide whether to say anything about it at all.
   readonly property string activeTier: activeProfile
-    ? Palette.profileTier(Model.rowsFor(activeProfile), root.catalogIndex) : "unknown"
+    ? Palette.profileTier(Model.rowsFor(activeProfile, root.modelView), root.catalogIndex) : "unknown"
 
   readonly property bool configBroken: errorCode === "E_PARSE"
   readonly property bool hasOpencode: !detected || detected.ok !== false
@@ -215,7 +216,7 @@ Panel {
     if (!root.activeProfile) return "No profile matches the live config"
     var head = root.plain(root.activeProfile.name)
     if (root.drift) head += ", edited"
-    return head + " — " + root.plain(Model.summary(root.activeProfile))
+    return head + " — " + root.plain(Model.summary(root.activeProfile, root.modelView))
   }
 
   // ---- Lifecycle ---------------------------------------------------------
@@ -605,7 +606,7 @@ Panel {
   // ---- Cursor ------------------------------------------------------------
 
   readonly property int rowCount: root.view === "editor"
-    ? (root.draft ? Model.rowsFor(root.draft).length : 0)
+    ? (root.draft ? Model.rowsFor(root.draft, root.modelView).length : 0)
     : (root.view === "templates" ? root.templates.length : listView.visibleProfiles.length)
 
   function moveCursor(dx, dy) {
@@ -718,7 +719,7 @@ Panel {
         profiles: root.profiles
         activeProfileId: root.activeProfileId
         ready: root.ready
-        shapeGeneration: root.shapeGeneration
+        modelView: root.modelView
         drift: root.drift
         busy: root.busy
         catalogIndex: root.catalogIndex
@@ -778,6 +779,7 @@ Panel {
 
         profile: root.draft
         original: root.draftOriginal
+        modelView: root.modelView
         catalog: root.catalog
         catalogIndex: root.catalogIndex
         favorites: root.favorites
@@ -951,25 +953,10 @@ Panel {
       var parsed = Model.parseJson(out, null)
       if (!parsed) return
       if (root.takeReadRefusal(parsed)) return
-      root.detected = parsed
       // Detect reads the rosters off the installed software and says which of
-      // the two shapes is actually running. Both have to reach Model before
-      // anything draws, or the first paint is of the wrong panel.
-      var rosterMoved = Model.setRoster(parsed.roster)
-      var shapeMoved = Model.setShape(String(parsed.shape || "opencode"))
-      // Model.js is a `.pragma library`, so those two write globals that no
-      // binding depends on: every row already drawn keeps the shape it was drawn
-      // with. `list` almost always lands first, so that shape is the wrong one.
-      // Re-seating the store is the dependency all of them do share, and it is
-      // only paid when something actually moved.
-      // And a counter that IS a QML property, so a binding can depend on it. The
-      // re-seat below only reaches rows drawn from the store, and only once the
-      // store has arrived; anything that reads Model.roster() or Model.shape()
-      // directly — every row summary in the list — had no way to know it had gone
-      // stale. That is a profile reading "2 of 6 pinned" against the built-in
-      // roster while holding twenty-four rows.
-      if (rosterMoved || shapeMoved) root.shapeGeneration++
-      if ((rosterMoved || shapeMoved) && root.loaded) root.store = Model.clone(root.store)
+      // the two shapes is actually running. modelView is derived from this, so
+      // every row redraws against it the moment it lands.
+      root.detected = parsed
       // A config that will not parse is the one state where nothing else in
       // the panel means anything, so it outranks every other message.
       var warnings = parsed.warnings || []
