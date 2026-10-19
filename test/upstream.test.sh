@@ -38,7 +38,7 @@ lacks(){ printf '%s' "$2" | jq -e --arg k "$3" 'index($k) == null' >/dev/null 2>
 probe(){ bash -c '
   set -uo pipefail
   eval "$(sed -n "/^mktemp_tracked()/,/^}/p;/^read_capped()/,/^}/p;/^omo_package_dir()/,/^}/p;/^omo_schema_file()/,/^}/p;/^omo_fields_json()/,/^}/p;/^omo_dts_enum()/,/^}/p;/^omo_category_names()/,/^}/p;/^ohmy_forbidden_for()/,/^}/p" "$1/bin/oc-profiles")"
-  SELF_DIR="$1/bin"; MAX_PACKAGE_BYTES=67108864
+  SELF_DIR="$1/bin"; MAX_PACKAGE_BYTES=67108864; MAX_CONFIG_BYTES=4194304
   CACHE_HOME="${CACHE_HOME_OVERRIDE:-${XDG_CACHE_HOME:-$HOME/.cache}}"
   # read_capped stages through mktemp_tracked, which writes into the run cache under
   # the prefix the script fixes at its top level, where its traps can see it.
