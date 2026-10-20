@@ -1,5 +1,37 @@
 # Changelog
 
+## 1.5.4
+
+The model catalogue is measured before anything is built out of it.
+
+### Fixed
+
+- **A hostile model catalogue can no longer make the join hold many times its own
+  size.** `bin/sync-models.sh` built each model id by joining the provider key to every
+  model key, and each search text by joining the provider name to every one of them,
+  before measuring either, and it built the set of every id the catalogue could spell
+  before any limit applied. A catalogue under 2 MiB with a 1 MiB provider key and 4,096
+  models asked jq for over 4 GiB, and the output cap, checked afterwards, bounded none
+  of it. A key is now what `bin/oc-profiles` would write, in at most 64 bytes of provider
+  and 128 of model; a name, a date, an effort or an env var is at most 128 bytes; and
+  whether a reachable model is known is looked up one id at a time. Providers and models
+  are capped as the lists grow, at 1,024 and 32,768. jq runs under a 512 MiB
+  address-space ceiling with no core file kept, and what it prints goes through `head -c`,
+  so the staged file never passes the output cap. On the real catalogue the output is
+  byte for byte what it was; a scaled-down copy of that catalogue, 16 KiB key and 16 KiB
+  name, took 378 MB and two minutes before and takes 22 MB and a third of a second now.
+- **A malformed entry in the catalogue is that one entry left out.** A model whose
+  `limit` is a string, or a provider whose `models` is a list, used to stop the whole
+  join and leave the picker on its last list.
+
+### Tests
+
+- `test/sync.test.sh`: a 1 MiB provider key and a 1 MiB provider name over 4,096 models
+  each finish under a 128 MiB ceiling, with the ordinary model listed, the oversized key
+  left out and the long name read as its key; a malformed entry leaves the rest loading;
+  the model cap holds; a ceiling jq cannot load under keeps the old list; an answer over
+  the output cap is never installed.
+
 ## 1.5.3
 
 Every panel draws against its own reading of what is installed, and the free templates

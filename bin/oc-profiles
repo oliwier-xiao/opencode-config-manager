@@ -96,7 +96,7 @@ jq() {
   )
 }
 
-VERSION="1.5.3"
+VERSION="1.5.4"
 PLUGIN_ID="oliwier.opencode-configs"
 
 STATE_HOME="${XDG_STATE_HOME:-$HOME/.local/state}"
