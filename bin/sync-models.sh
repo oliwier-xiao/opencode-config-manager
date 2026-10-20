@@ -256,84 +256,128 @@ reach_in="$(stage)" || { echo offline; exit 1; }
 "$SELF_DIR/safe-read" "$REACH" --max-bytes "$MAX_REACH_BYTES" \
   --label "the reachable-model list" > "$reach_in" 2>/dev/null || : > "$reach_in"
 
+# What the join may hold. jq builds its whole answer before it prints a byte of it, so
+# the cap on what comes out, below, cannot bound what jq held on the way there: that
+# bound has to be inside. The join measures every string the catalogue supplies before
+# it builds anything out of it, and caps both counts as the lists grow, so what it
+# holds is the catalogue plus a bounded amount per model. Parsing has a cost of its
+# own that no program can shape — a file of nothing but empty brackets costs jq a few
+# hundred bytes a pair — so jq also runs under an address-space ceiling: the real
+# catalogue needs under 100 MiB of it, and at 512 MiB jq stops rather than grows, with
+# no core file kept. What it prints passes through head on the way to the disk, so the
+# staged file never outgrows the cap it is then checked against.
+MAX_PROVIDERS="${MAX_PROVIDERS:-1024}"
+MAX_MODELS="${MAX_MODELS:-32768}"
+MAX_JQ_KB="${MAX_JQ_KB:-524288}"
+MAX_OUT_BYTES="${MAX_OUT_BYTES:-12582912}"
+bounded_jq() (
+  ulimit -c 0 2>/dev/null
+  # A hard limit already under the ceiling cannot be raised to it, and need not be.
+  ulimit -v "$MAX_JQ_KB" 2>/dev/null \
+    || { lim="$(ulimit -v)"; [ "$lim" != unlimited ] && [ "$lim" -le "$MAX_JQ_KB" ]; } \
+    || exit 1
+  exec jq "$@"
+)
+
 staged="$(stage)" || { echo offline; exit 1; }
-jq -c --rawfile reach "$reach_in" '
-  ($reach | split("\n") | map(select(length > 0))) as $reachable
+bounded_jq -c --rawfile reach "$reach_in" \
+  --argjson max_providers "$MAX_PROVIDERS" --argjson max_models "$MAX_MODELS" '
+  # Every string the catalogue supplies is measured before anything is built out of
+  # it. An id joins a provider key to each model key of that provider, and the search
+  # text joins the provider name to each of them, so a string nobody measured is
+  # multiplied rather than copied: a 1 MiB key over 4,096 models was 4 GiB of jq, out
+  # of a download under 2 MiB. So a key is what bin/oc-profiles would write, a
+  # provider/model id and nothing else, in at most 64 bytes of provider and 128 of
+  # model; a name, a date, an effort or an env var is a string of at most 128 bytes or
+  # is not used; and a field of the wrong type reads as missing, so a malformed entry
+  # is one entry left out rather than the whole catalogue. On the real catalogue none
+  # of this changes a byte.
+  def provider_ok: type == "string" and utf8bytelength <= 64 and test("^[A-Za-z0-9~._-]+$");
+  def model_ok: type == "string" and utf8bytelength <= 128
+                and test("^[^/[:space:]]+(/[^/[:space:]]+)*$");
+  def brief: if type == "string" and utf8bytelength <= 128 then . else null end;
+  def number: if type == "number" then . else null end;
+  def obj: if type == "object" then . else {} end;
+  def arr: if type == "array" then . else [] end;
+  obj as $root
+  | ($reach | split("\n") | map(select(length > 0))) as $reachable
   | ($reachable | map({key:., value:true}) | from_entries) as $reach_set
-  # Every id models.dev describes, before any of the filters below run. The
-  # fallback at the end needs to tell "never heard of it" from "heard of it and
-  # ruled it out": tested against the filtered list, a model models.dev says
-  # cannot call tools comes straight back as a first-class row, which is a model
-  # that loads and then fails on the first tool call an agent makes.
-  | ( [ to_entries[] | .key as $p | (.value.models // {}) | keys[] | ($p + "/" + .) ]
-      | map({key:., value:true}) | from_entries ) as $known_set
+  | [ limit($max_providers; $root | keys_unsorted[]
+        | select(provider_ok and ($root[.] | type == "object"))) ] as $pkeys
   | { generated: (now | floor),
       source: "models.dev + opencode models",
       reachableCount: ($reachable | length),
-      providers: [ to_entries[]
-        | .key as $p | .value.name as $pn
-        | { id: $p, name: ($pn // $p),
-            env: (.value.env // []),
-            reachable: ( (.value.models // {}) | keys
-                         | map(select($reach_set[($p + "/" + .)])) | length ) }
+      providers: [ $pkeys[] as $p | $root[$p] as $pv
+        | { id: $p, name: (($pv.name | brief) // $p),
+            env: [ limit(16; $pv.env | arr | .[] | brief | strings) ],
+            reachable: ([ $pv.models | obj | keys_unsorted[]
+                          | select(model_ok and ($reach_set[$p + "/" + .] // false)) ] | length) }
         | select(.reachable > 0) ],
-      models: [ to_entries[]
-        | .key as $p | .value.name as $pn
-        | (.value.models // {}) | to_entries[]
-        | .value as $m
-        | ($p + "/" + .key) as $full
-        | select($m.tool_call == true)
-        | select(($m.modalities.output // []) | index("text"))
-        # Deprecated, but reachable, means you are using it today. Hiding it would
-        # take a model out of the picker while it is still selected in the config —
-        # and it would come back through the fallback below stripped of its name,
-        # context and price. Deprecated and unreachable is just history, and goes.
-        | select((($m.status // "active") != "deprecated") or ($reach_set[$full] // false))
-        | { id: $full,
-            provider: $p,
-            providerName: ($pn // $p),
-            modelId: .key,
-            name: ($m.name // .key),
-            context: ($m.limit.context // 0),
-            maxOutput: ($m.limit.output // 0),
-            inputCost: ($m.cost.input // null),
-            outputCost: ($m.cost.output // null),
-            cacheRead: ($m.cost.cache_read // null),
-            reasoning: ($m.reasoning // false),
-            attachment: ($m.attachment // false),
-            openWeights: ($m.open_weights // false),
-            released: ($m.release_date // null),
-            variants: [ ($m.reasoning_options // [])[] | select(.type == "effort") | .values[] ],
-            vision: ((($m.modalities.input // []) | index("image")) != null),
-            free: (($m.cost.input // 1) == 0 and ($m.cost.output // 1) == 0),
-            reachable: ($reach_set[$full] // false),
-            search: (($p + " " + ($pn // "") + " " + .key + " " + ($m.name // "")) | ascii_downcase) } ]
+      # Capped as the list grows: catalogue rows first, then the fallback below.
+      models: [ limit($max_models;
+        ( $pkeys[] as $p | $root[$p] as $pv | ($pv.name | brief) as $pn
+          | ($pv.models | obj) as $ms
+          | $ms | keys_unsorted[] | select(model_ok) | . as $k
+          | $ms[$k] | objects | . as $m
+          | ($p + "/" + $k) as $full
+          | select($m.tool_call == true)
+          | select(any($m.modalities | obj | .output | arr | .[]; . == "text"))
+          # Deprecated, but reachable, means you are using it today. Hiding it would
+          # take a model out of the picker while it is still selected in the config —
+          # and it would come back through the fallback below stripped of its name,
+          # context and price. Deprecated and unreachable is just history, and goes.
+          | select((($m.status // "active") != "deprecated") or ($reach_set[$full] // false))
+          | ($m.limit | obj) as $lim | ($m.cost | obj) as $cost
+          | { id: $full,
+              provider: $p,
+              providerName: ($pn // $p),
+              modelId: $k,
+              name: (($m.name | brief) // $k),
+              context: (($lim.context | number) // 0),
+              maxOutput: (($lim.output | number) // 0),
+              inputCost: ($cost.input | number),
+              outputCost: ($cost.output | number),
+              cacheRead: ($cost.cache_read | number),
+              reasoning: ($m.reasoning == true),
+              attachment: ($m.attachment == true),
+              openWeights: ($m.open_weights == true),
+              released: ($m.release_date | brief),
+              variants: [ limit(16; $m.reasoning_options | arr | .[] | obj
+                                    | select(.type == "effort") | .values | arr | .[]
+                                    | select(. == null or brief != null)) ],
+              vision: any($m.modalities | obj | .input | arr | .[]; . == "image"),
+              free: ((($cost.input | number) // 1) == 0 and (($cost.output | number) // 1) == 0),
+              reachable: ($reach_set[$full] // false),
+              search: (($p + " " + ($pn // "") + " " + $k + " " + (($m.name | brief) // ""))
+                       | ascii_downcase) } ),
+        # A model opencode can reach but models.dev has never heard of is still
+        # selectable; keep it. One models.dev knows and the filters above dropped is not
+        # that, and does not come back. Which is which is asked of the catalogue one
+        # reachable id at a time, rather than read off a set of every id it spells built
+        # before anything had been measured.
+        ( $reachable[]
+          | select(utf8bytelength <= 193)
+          | split("/") as $parts | ($parts[1:] | join("/")) as $rest
+          | select(($parts[0] | provider_ok) and ($rest | model_ok))
+          | select($root[$parts[0]] | obj | .models | obj | has($rest) | not)
+          | { id: ., provider: $parts[0], providerName: $parts[0], modelId: $rest,
+              name: $parts[-1], context: 0, maxOutput: 0,
+              inputCost: null, outputCost: null, cacheRead: null,
+              reasoning: false, attachment: false, openWeights: false, released: null,
+              variants: [], vision: false, free: false, reachable: true,
+              search: ascii_downcase } ) ) ]
     }
-  # A model opencode can reach but models.dev has never heard of is still selectable; keep it.
-  # One models.dev knows and the filters above dropped is not that, and does not come back.
-  | . as $cat
-  | .models += [ $reachable[]
-      | select($known_set[.] | not)
-      | (split("/")) as $parts
-      | { id: ., provider: $parts[0], providerName: $parts[0],
-          modelId: ($parts[1:] | join("/")),
-          name: ($parts[-1]), context: 0, maxOutput: 0,
-          inputCost: null, outputCost: null, cacheRead: null,
-          reasoning: false, attachment: false, openWeights: false, released: null,
-          variants: [], vision: false, free: false, reachable: true,
-          search: (. | ascii_downcase) } ]
   | .totalCount = (.models | length)
-' "$raw_in" > "$staged" 2>/dev/null
+' "$raw_in" 2>/dev/null | head -c "$((MAX_OUT_BYTES + 1))" > "$staged"
 
 # Producer-side ceiling. The panel refuses an oversized catalog too, but the
 # cheaper place to stop it is before it is ever written.
-MAX_OUT_BYTES="${MAX_OUT_BYTES:-12582912}"
 if [ -s "$staged" ] && [ "$(stat -c %s "$staged" 2>/dev/null || echo 0)" -gt "$MAX_OUT_BYTES" ]; then
   [ -s "$OUT" ] || { echo offline; exit 1; }
   echo stale; exit 0
 fi
 
-if [ -s "$staged" ] && jq -e '.models | length > 0' "$staged" >/dev/null 2>&1; then
+if [ -s "$staged" ] && bounded_jq -e '.models | length > 0' "$staged" >/dev/null 2>&1; then
   mv -fT "$staged" "$OUT"
   # Here, and only here, and only for the three answers that are actually about the
   # catalogue: a body that parsed (`fresh`), opencode's own newer copy (`local`), or

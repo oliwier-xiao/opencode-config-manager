@@ -222,6 +222,63 @@ before="$(calls "$T/curl.calls")"
 FORCE=1 run >/dev/null
 is "forced run downloads anyway"    "$(calls "$T/curl.calls")" "$((before+1))"
 
+echo "=== a hostile catalogue costs what it weighs, not a multiple of it ==="
+# models.dev is somebody else's file. An id joins a provider key to each of that
+# provider's model keys, and the search text joins its name to each of them, so a
+# string that was never measured is multiplied rather than copied: a 1 MiB key over
+# 4,096 models was 4 GiB of jq out of a download under 2 MiB, and a 1 MiB name the
+# same again. jq runs here under 128 MiB, a small part of which this catalogue needs;
+# a join that multiplied again would hit that and leave no list behind.
+python3 - "$T/api.json" <<'PY'
+import json, sys
+models = {"m%d" % i: {"tool_call": True, "modalities": {"output": ["text"]}} for i in range(4096)}
+json.dump({
+    "k" * 1048576: {"name": "Huge key", "models": models},
+    "wide": {"name": "n" * 1048576, "models": models},
+    "zen": {"name": "Zen", "models": {
+        "good": {"tool_call": True, "modalities": {"output": ["text"]}, "name": "Good"}}},
+}, open(sys.argv[1], "w"))
+PY
+is "the join finishes under its ceiling" "$(MAX_JQ_KB=131072 FORCE=1 run)" "fresh"
+is "the ordinary model is in"        "$(jq -r '[.models[].id]|index("zen/good")!=null' "$C/models.json")" "true"
+is "the unmeasurable key is not"     "$(jq -r '[.models[]|select(.provider|utf8bytelength > 64)]|length' "$C/models.json")" "0"
+is "the long name falls back to its key" "$(jq -r '[.models[]|select(.provider=="wide")]|"\(length) \(.[0].providerName)"' "$C/models.json")" "4096 wide"
+is "the list is the size of what it lists" "$([ "$(stat -c %s "$C/models.json")" -lt 4194304 ] && echo small)" "small"
+
+echo "=== a malformed entry is left out, not the whole catalogue ==="
+# One model whose fields are the wrong type, a provider whose models are a list and a
+# provider that is a number. Each used to stop the whole join; now each is one entry.
+cat > "$T/api.json" <<'JSON'
+{"zen":{"name":"Zen","models":{
+  "good":{"tool_call":true,"modalities":{"output":["text"]},"name":"Good"},
+  "odd":{"tool_call":true,"modalities":{"output":["text"]},"limit":"big","cost":7,
+         "name":{"not":"a name"},"reasoning_options":"effort","release_date":12}}},
+ "listed":{"models":["not","an","object"]},
+ "scalar":5}
+JSON
+is "the catalogue still loads"       "$(FORCE=1 run)" "fresh"
+is "the odd model reads as unknown"  "$(jq -c '[.models[]|select(.id=="zen/odd")][0]|[.name,.context,.inputCost,.variants,.released]' "$C/models.json")" '["odd",0,null,[],null]'
+
+echo "=== the model count is capped while the list is built ==="
+python3 - "$T/api.json" <<'PY'
+import json, sys
+json.dump({"zen": {"models": {"m%d" % i: {"tool_call": True, "modalities": {"output": ["text"]}}
+                              for i in range(10)}}}, open(sys.argv[1], "w"))
+PY
+MAX_MODELS=3 FORCE=1 run >/dev/null
+is "no more models than the cap"     "$(jq -r .totalCount "$C/models.json")" "3"
+
+echo "=== jq runs under its address-space ceiling ==="
+# Too small for jq to load at all, which proves the ceiling is the one jq runs under.
+FORCE=1 run >/dev/null
+cp "$C/models.json" "$T/models.before"
+is "a ceiling jq cannot fit in keeps the old list" "$(MAX_JQ_KB=4096 FORCE=1 run)" "stale"
+is "and the list on disk is untouched" "$(cmp -s "$T/models.before" "$C/models.json" && echo same)" "same"
+
+echo "=== an answer over the output cap is never installed ==="
+is "it is refused"                   "$(MAX_OUT_BYTES=1024 FORCE=1 run)" "stale"
+is "and the list on disk is untouched" "$(cmp -s "$T/models.before" "$C/models.json" && echo same)" "same"
+
 printf '\n%d passed' "$pass"
 [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"
 printf '\n'
