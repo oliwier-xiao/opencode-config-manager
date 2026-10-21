@@ -327,6 +327,17 @@ def adjacent_deletes():
     assert strip_ref(r.stdout) == {"provider": {"x": 1}, "model": "z/z"}, r.stdout
 t("adjacent deletions leave the object whole", adjacent_deletes)
 
+def deleting_the_last_member_keeps_its_neighbours_comments():
+    # Deleting the last member took the comma before it, and everything from that
+    # comma on: the comment trailing the member before, and a line commented out.
+    text = '{\n  "model": "a/b", // the base model\n  // "small_model": "c/d",\n  "agent": {"build": {"model": "x/y"}}\n}\n'
+    r = apply_raw(text, {"model": "a/b"}, ["model", "agent"])
+    assert r.returncode == 0, r.stderr
+    assert strip_ref(r.stdout) == {"model": "a/b"}, r.stdout
+    assert "// the base model" in r.stdout, "the neighbour's comment was lost"
+    assert '// "small_model": "c/d",' in r.stdout, "the commented-out line was lost"
+t("deleting the last member keeps the comments before it", deleting_the_last_member_keeps_its_neighbours_comments)
+
 def one_line_object():
     r = apply_raw('{ "model": "a/b" }', {"agent": {"b": {"model": "x/y"}}}, ["model", "agent"])
     assert r.returncode == 0, r.stderr
