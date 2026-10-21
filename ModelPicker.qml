@@ -75,13 +75,19 @@ Item {
 
   readonly property var currentModel: Catalog.lookup(root.catalog, root.catalogIndex, root.value)
 
-  readonly property var result: Catalog.search(root.catalog, root.query, {
-    scope: root.effectiveScope,
-    limit: 200,
-    favorites: root.favorites,
-    recents: root.recents,
-    current: root.value
-  })
+  // Searched only while the list is showing. The editor keeps a picker on every row,
+  // each with its list closed, and rebuilds every row on each keystroke in Name: as a
+  // plain binding, every one of them scored and sorted the whole catalogue on each
+  // of those keystrokes, on the one thread the whole desktop draws on.
+  readonly property var result: popup.visible
+    ? Catalog.search(root.catalog, root.query, {
+        scope: root.effectiveScope,
+        limit: 200,
+        favorites: root.favorites,
+        recents: root.recents,
+        current: root.value
+      })
+    : ({ rows: [], total: 0, shown: 0, truncated: false })
 
   // Headings only while the list is unqueried. Once you are typing, rank is the
   // organising principle and a heading just pushes the answer further down.

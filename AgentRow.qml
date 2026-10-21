@@ -218,7 +218,11 @@ Item {
           spacing: Style.spacing.sm
 
           Repeater {
-            model: root.row ? root.row.fallbacks : []
+            // Sixteen drawn at most. A Repeater makes every item it is given, each
+            // chip is a handful of live ones, and a chain is read out of a file a
+            // hand edit can make as long as it likes. The chain itself stays whole:
+            // the chips act on it by index, and the rest are counted below.
+            model: root.row ? root.row.fallbacks.slice(0, 16) : []
 
             BorderSurface {
               id: chipSurface
@@ -319,6 +323,16 @@ Item {
                 }
               }
             }
+          }
+
+          Text {
+            readonly property int hidden: root.row ? root.row.fallbacks.length - 16 : 0
+            visible: hidden > 0
+            textFormat: Text.PlainText
+            text: "+" + hidden + " more"
+            color: root.veryMuted
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
           }
 
           // The + is a chip-shaped empty slot at the end of the stack rather
