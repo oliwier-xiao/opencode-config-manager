@@ -762,7 +762,6 @@ Panel {
         onSaveCurrentRequested: root.askAddProfile()
         onUpdateActiveRequested: root.updateActiveFromDisk()
         onUndoRequested: root.revert()
-        onOpenFileRequested: function (path) { root.openConfigFile(path) }
         onCursorMoved: function (index) { root.cursorActive = true; root.selectedIndex = index }
         onDismissToast: root.toast = ""
         onFixRequested: function (index) {
@@ -1072,7 +1071,11 @@ Panel {
       "OPENCODE_CONFIG_DIR": root.effectiveConfigDir !== "" ? root.effectiveConfigDir : null
     })
     onAnswered: function (code, out) {
-      if (code !== -1) root.loadCatalog()
+      // Re-read only when the run says it wrote something. Every panel open asks for
+      // a run, and the usual answer is `cached` — nothing changed — after the open
+      // has already read the list once; reading it again parsed the whole catalogue
+      // a second time, on the thread the desktop draws on, for nothing.
+      if (code !== -1 && String(out).trim() !== "cached") root.loadCatalog()
       catalogSync.force = false
       // Honoured here rather than in refresh(), because a run already going cannot
       // be told anything: its environment was fixed when it started. The refresh
@@ -1170,27 +1173,12 @@ Panel {
     onTriggered: if (!catalogSync.running) catalogSync.launch()
   }
 
-  // ConfirmDialog's message and the bar tooltip are shell components that do
-  // not set textFormat, so they default to AutoText — rich text, which will
-  // fetch what a crafted string points at. Names come from a JSON file that a
-  // second machine or a hand edit can write, so they are flattened first.
+  // Names come from a JSON file that a second machine or a hand edit can write, and
+  // they go on to shell components this plugin does not own — ConfirmDialog's message,
+  // the bar tooltip. Those set PlainText today; the names are flattened first anyway,
+  // so a shell release that stops doing that does not turn a name into markup.
   function plain(s) {
     return Model.plain(s)
-  }
-
-  // The file a parse error names, in whatever the desktop opens it with. The path is
-  // one the backend reported for a config it reads, never a URL; it is checked to be
-  // an absolute path before it goes anywhere. Started detached and like every other
-  // process here: an absolute program, a cleared environment, HOME as its folder.
-  function openConfigFile(path) {
-    var p = String(path || "")
-    if (p.charAt(0) !== "/" || p.length > 4096 || /[\u0000-\u001f\u007f]/.test(p)) return
-    Quickshell.execDetached({
-      command: ["/usr/bin/xdg-open", p],
-      clearEnvironment: true,
-      environment: root.desktopEnv(),
-      workingDirectory: root.home
-    })
   }
 
   function basename(path) {

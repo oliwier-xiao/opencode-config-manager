@@ -89,7 +89,6 @@ Item {
   signal saveCurrentRequested()
   signal updateActiveRequested()
   signal undoRequested()
-  signal openFileRequested(string path)
   signal cursorMoved(int index)
   signal dismissToast()
   signal fixRequested(int index)
@@ -207,14 +206,18 @@ Item {
             wrapMode: Text.WordWrap
           }
 
-          Button {
+          // Named, not opened: handing the path to whatever program the desktop picks
+          // put it on a command line every account on the machine can read, for as
+          // long as that program stayed open.
+          Text {
             visible: root.errorPath !== ""
-            text: "Open the file"
-            fontSize: Style.font.caption
-            bordered: true
-            foreground: root.foreground
-            accent: root.accent
-            onClicked: root.openFileRequested(root.errorPath)
+            width: parent.width
+            textFormat: Text.PlainText
+            text: root.errorPath
+            color: Util.alpha(root.foreground, 0.7)
+            font.family: root.fontFamily
+            font.pixelSize: Style.font.caption
+            elide: Text.ElideMiddle
           }
         }
       }
