@@ -24,6 +24,7 @@ Exit: 0 written. 1 could not write. 2 refused.
 """
 import errno
 import os
+import signal
 import stat
 import sys
 
@@ -33,7 +34,16 @@ def _refuse(msg):
     return 2
 
 
+# Python's default for TERM is to die where it stands, which runs no `finally`: a
+# deadline landing mid-write left the temporary — a whole copy of the config — beside
+# the config for good. Raised as an exit instead, the cleanup below runs on the way out.
+def _stop(signum, _frame):
+    raise SystemExit(128 + signum)
+
+
 def main(argv):
+    for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT):
+        signal.signal(sig, _stop)
     if len(argv) < 2:
         sys.stderr.write(__doc__)
         return 2
@@ -54,6 +64,10 @@ def main(argv):
     if os.path.islink(dest):
         if not follow:
             return _refuse("%s is a symlink; refusing to write through it" % dest)
+        # Followed only when this user made it: a link another account planted in a
+        # folder it can write would turn this write into one somewhere else.
+        if os.lstat(dest).st_uid != os.getuid():
+            return _refuse("%s is a link another user owns; refusing to write through it" % dest)
         # Resolve once, here, and use the result for everything below.
         dest = os.path.realpath(dest)
 

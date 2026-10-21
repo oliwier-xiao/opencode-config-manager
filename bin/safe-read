@@ -30,7 +30,10 @@ file itself, so the ancestor case grants no capability the direct one does not. 
 the checks below are actually for is the shape of what gets read: never a FIFO this
 process stalls inside, never a device, never more bytes than were promised.
 
-  safe-read <path> --max-bytes N [--follow] [--allow-empty] [--label TEXT]
+  safe-read <path> --max-bytes N [--follow] [--no-empty] [--label TEXT]
+
+--no-empty refuses a zero-byte file, which for a cache or a config means an
+interrupted write rather than a file.
 
 Exit: 0 wrote the bytes to stdout. 1 there is nothing at that path. 2 refused it,
 with the reason on stderr. 3 could not read it.
