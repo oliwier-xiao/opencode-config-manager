@@ -151,6 +151,31 @@ F=$(run "$D" apply fb)
 is "apply still succeeds"        "$(jq -r .ok <<<"$F")" "true"
 is "but the key is not written"  "$("$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -r '.fallback_models // "absent"')" "absent"
 
+echo "=== omo: undo does not write a backup of the legacy file over the config read now ==="
+D=$(mk moved no)
+printf '{"$schema":"https://opencode.ai/config.json","plugin":["oh-my-openagent@latest"]}' > "$D/cfg/opencode.json"
+printf '%s\n' '{"agents":{"oracle":{"model":"anthropic/claude-opus-5"}}}' > "$D/cfg/oh-my-openagent.json"
+OC_PROFILE_JSON='{"id":"leg","name":"Leg","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{"oracle":{"model":"google/gemini-3-flash-preview"}}}}]}' \
+  run "$D" save >/dev/null
+is "the switch lands on the legacy file" "$(run "$D" apply leg | jq -r .ok)" "true"
+cp "$D/cfg/oh-my-openagent.json" "$D/legacy.after"
+printf '%s\n' '{"[opencode]":{"agents":{"oracle":{"model":"google/gemini-3-flash-preview"}}}}' > "$D/omo/omo.jsonc"
+is "undo is refused once the config has moved" "$(run "$D" revert | jq -r .code)" "E_MOVED"
+cmp -s "$D/cfg/oh-my-openagent.json" "$D/legacy.after" \
+  && ok "and the leftover is not edited" || no "and the leftover is not edited" "it was"
+
+echo "=== omo: with no agents or categories in the block, a profile brings back only models ==="
+D=$(mk nomaps yes)
+printf '{"$schema":"https://opencode.ai/config.json","plugin":["oh-my-openagent@latest"]}' > "$D/cfg/opencode.json"
+printf '%s\n' '{"[opencode]":{"permission":{"bash":"ask"}}}' > "$D/omo/omo.jsonc"
+OC_PROFILE_JSON='{"id":"old","name":"Old","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],"payload":{"agents":{"oracle":{"model":"anthropic/claude-opus-5","variant":"max","permission":{"bash":"allow"},"prompt_append":"OLD"}},"categories":{"quick":{"model":"google/gemini-3-flash-preview","tools":{"bash":true}}}}}]}' \
+  run "$D" save >/dev/null
+is "the switch is made"           "$(run "$D" apply old | jq -r .ok)" "true"
+omo_block() { "$REPO/bin/jsonc-edit" read "$D/omo/omo.jsonc" --scope '[opencode]' | jq -c "$1"; }
+is "an agent gets its model fields and nothing else" "$(omo_block '.agents')" '{"oracle":{"model":"anthropic/claude-opus-5","variant":"max"}}'
+is "and so does a category"       "$(omo_block '.categories')" '{"quick":{"model":"google/gemini-3-flash-preview"}}'
+is "the block's own policy stays" "$(omo_block '.permission')" '{"bash":"ask"}'
+
 echo
 [ "$fail" -eq 0 ] && echo "$pass passed" || echo "FAILED $fail / $pass passed"
 exit $([ "$fail" -eq 0 ] && echo 0 || echo 1)

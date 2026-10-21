@@ -75,7 +75,11 @@ jq() {
         args+=("$1"); shift ;;
     esac
   done
-  if [ "${#names[@]}" -eq 0 ]; then command jq "${args[@]}"; return; fi
+  # Every jq runs without HOME. jq sources $HOME/.jq ahead of every program, so a
+  # file there can redefine a built-in — limit, test, utf8bytelength — underneath
+  # every check below, and a FIFO there holds every call until the timebox ends it.
+  # No program here reads $HOME.
+  if [ "${#names[@]}" -eq 0 ]; then ( unset HOME; exec jq "${args[@]}" ); return; fi
   [ "$program_at" -ge 0 ] || { printf 'oc-profiles: jq was given variables and no program\n' >&2; return 2; }
   for i in "${!names[@]}"; do
     case "${names[$i]}" in
@@ -92,6 +96,7 @@ jq() {
   # way into the environment either; exec skips this function and runs jq itself.
   (
     for i in "${!values[@]}"; do export "OC_JQ_$i=${values[$i]}"; done
+    unset HOME
     exec jq "${args[@]}"
   )
 }
@@ -163,9 +168,15 @@ run_opencode() {
   to="$(type -P timeout)" || return 127
   # From HOME: opencode reads the project config of the folder it starts in, and
   # whatever folder this was started from is nobody's choice of project.
+  # Neither probe needs the model catalogue, so opencode is told not to download one
+  # and handed /dev/null rather than its own cache: a download and a file of whatever
+  # size somebody else made them, which this run has no use for.
+  # -k 2: a timeout runs in a process group of its own, out of reach of the deadline
+  # the panel set, and TERM alone does not end a program with a handler for it.
   ( umask "$OC_INHERITED_UMASK"; PATH="${bin%/*}:/usr/bin:/bin"; export PATH
+    export OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_MODELS_PATH=/dev/null
     cd "$HOME" 2>/dev/null || cd /
-    exec "$to" "$secs" "$bin" "$@" )
+    exec "$to" -k 2 "$secs" "$bin" "$@" )
 }
 
 # Settings arrive as environment so the panel and a terminal drive the same code.
@@ -239,19 +250,27 @@ cleanup_temps() {
 # the middle of one. The in-process rollback cannot run once bash is dead, so the
 # same restore is registered here: the backup directory and the files written so
 # far, put back before the signal is honoured. Cleared once the switch has landed.
+# Each file goes back to the path it was written at, recorded beside it rather than
+# found by name again: a migration that moved the config in between would otherwise
+# have one file's copy written over another file.
 OC_ROLLBACK_DIR=""
 OC_ROLLBACK_WROTE=()
+declare -A OC_ROLLBACK_PATH=()
+# How many files the last rollback could not put back.
+OC_UNRESTORED=0
 rollback_writes() {
+  OC_UNRESTORED=0
   [ -n "$OC_ROLLBACK_DIR" ] || return 0
-  [ "${#OC_ROLLBACK_WROTE[@]}" -gt 0 ] || return 0
-  local l
+  local l dest
   for l in "${OC_ROLLBACK_WROTE[@]}"; do
     [ -n "$l" ] || continue
-    [ -s "$OC_ROLLBACK_DIR/$l.json" ] || continue
+    dest="${OC_ROLLBACK_PATH[$l]:-}"
+    [ -n "$dest" ] && [ -s "$OC_ROLLBACK_DIR/$l.json" ] || continue
     "$SELF_DIR/safe-read" "$OC_ROLLBACK_DIR/$l.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$(file_for "$l")" 2>/dev/null || true
+      --label "that backup" 2>/dev/null | atomic_write "$dest" 2>/dev/null \
+      || OC_UNRESTORED=$((OC_UNRESTORED + 1))
   done
-  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
   return 0
 }
 on_signal() { rollback_writes; cleanup_temps; exit 143; }
@@ -333,6 +352,33 @@ backup_copy() {
   return 1
 }
 
+# The whole file as it is now, read the way a backup reads it, as one digest; or
+# "absent" when there is no file there that a backup could have been taken of.
+file_digest() {
+  local tmp d
+  tmp="$(read_capped "$1" "$MAX_BACKUP_BYTES" "$(basename "$1")")" || { printf 'absent'; return 0; }
+  d="$(sha256sum < "$tmp" | cut -c1-64)"
+  rm -f "$tmp"
+  printf 'sha256:%s' "$d"
+}
+
+# What a write left on disk, kept in the manifest beside the copy it can be undone
+# from. Undo puts a whole file back, so it may only do that over exactly this:
+# anything else in the file is an edit made since — a permission tightened, an MCP
+# server removed, a key rotated — and a copy from before the write would undo it too.
+# record_written <backup dir> <logical> <path>
+record_written() {
+  local dir="$1" logical="$2" path="$3" digest next
+  digest="$(file_digest "$path")"
+  next="$("$SELF_DIR/safe-read" "$dir/meta.json" --max-bytes "$MAX_BACKUP_BYTES" \
+            --label "the backup manifest" 2>/dev/null \
+          | jq -c --arg l "$logical" --arg d "$digest" \
+              '.files |= map(if .logical == $l then .written = $d else . end)' 2>/dev/null)" \
+    || return 1
+  [ -n "$next" ] || return 1
+  printf '%s\n' "$next" | write_private "$dir/meta.json" 2>/dev/null
+}
+
 # The digest of what a logical target actually contributes, which for the
 # unified omo config is one key deep rather than the whole file.
 fingerprint_logical() {
@@ -409,6 +455,11 @@ MAX_CONFIG_BYTES=4194304
 MAX_BACKUP_BYTES=4194304
 # The bundle really is this big: 4.19.3 ships a 5.5 MB dist/index.js.
 MAX_PACKAGE_BYTES=67108864
+# Everything else read out of the package is far smaller, and parsed rather than
+# searched, so it gets a ceiling of its own: 5.1 ships an 18 KB package.json, a
+# 291 KB schema and declaration files of a few KB.
+MAX_MANIFEST_BYTES=1048576
+MAX_SCHEMA_BYTES=4194304
 
 # Whatever this prints ends up buffered whole inside omarchy-shell before the panel
 # gets a chance to measure it, so the two commands whose output grows with a file
@@ -552,6 +603,15 @@ scope_for() {
   esac
 }
 
+# The version a package directory declares, or nothing. A version is a short string
+# of version characters: anything else is not one, and would otherwise go on to key
+# the roster cache and into every detect answer.
+omo_version_at() {
+  "$SELF_DIR/safe-read" "$1/package.json" --follow --max-bytes "$MAX_MANIFEST_BYTES" \
+      --label "an oh-my-openagent package manifest" 2>/dev/null \
+    | jq -r '.version // empty | strings | select(test("^[0-9A-Za-z.+-]{1,64}$"))' 2>/dev/null
+}
+
 # Where opencode unpacks a plugin. Not $CACHE_HOME/opencode/node_modules — that
 # path has never existed on any install; every plugin gets its own directory named
 # after the spec it was requested by.
@@ -567,8 +627,7 @@ omo_package_dir() {
     [ -f "$d/package.json" ] || continue
     # Through the descriptor like every other read here, never by handing jq a name
     # to open: a FIFO planted at it would hold this run until the timebox ends it.
-    v="$("$SELF_DIR/safe-read" "$d/package.json" --follow --max-bytes "$MAX_CONFIG_BYTES" \
-           --label "an oh-my-openagent package manifest" 2>/dev/null | jq -r '.version // empty' 2>/dev/null)"
+    v="$(omo_version_at "$d")"
     [ -n "$v" ] || continue
     if [ -z "$best" ] || [ "$(printf '%s\n%s\n' "$best_v" "$v" | sort -V | tail -1)" = "$v" ]; then
       best="$d"; best_v="$v"
@@ -615,6 +674,12 @@ omo_schema_file() {
   return 1
 }
 
+# A name out of somebody else's package — an agent, a category, a field — is a short
+# identifier, and there are a few dozen of them. Each one is drawn as a row and
+# carried in every detect answer, so anything else is dropped here, and the list is
+# cut at a count no real release comes near.
+ROSTER_NAMES='def names: [ .[]? | strings | select(test("^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$")) ] | .[0:256];'
+
 # Which fields an agent entry and a category entry may carry, read off the schema
 # the install actually ships. Agents are enumerated and categories are open-keyed,
 # so the entry schema sits under `properties` for one and `additionalProperties` for
@@ -623,13 +688,13 @@ omo_fields_json() {
   local pkg="$1" schema_p schema_f out
   [ -n "$pkg" ] || return 1
   schema_p="$(omo_schema_file "$pkg")" || return 1
-  schema_f="$(read_capped "$schema_p" "$MAX_PACKAGE_BYTES" "the oh-my-openagent schema")" || return 1
-  out="$(jq -c '
+  schema_f="$(read_capped "$schema_p" "$MAX_SCHEMA_BYTES" "the oh-my-openagent schema")" || return 1
+  out="$(jq -c "$ROSTER_NAMES"'
     def entry($n):
         (($n.properties // {}) | to_entries) as $e
       | if ($e | length) > 0 then $e[0].value else ($n.additionalProperties // {}) end;
-    { agent:    ( entry(.properties.agents     // {}) | (.properties // {}) | keys ),
-      category: ( entry(.properties.categories // {}) | (.properties // {}) | keys ) }' \
+    { agent:    ( entry(.properties.agents     // {}) | (.properties // {}) | keys | names ),
+      category: ( entry(.properties.categories // {}) | (.properties // {}) | keys | names ) }' \
     "$schema_f" 2>/dev/null)"
   rm -f "$schema_f"
   case "$out" in ''|null) return 1 ;; esac
@@ -645,7 +710,7 @@ omo_fields_json() {
 omo_dts_enum() {
   local file="$1" symbol="$2" f out
   [ -f "$file" ] || return 1
-  f="$(read_capped "$file" "$MAX_PACKAGE_BYTES" "the oh-my-openagent declarations")" || return 1
+  f="$(read_capped "$file" "$MAX_SCHEMA_BYTES" "the oh-my-openagent declarations")" || return 1
   out="$(python3 -I - "$f" "$symbol" <<'PYEOF'
 import json, re, sys
 try:
@@ -655,8 +720,13 @@ except OSError:
 # Bounded to this symbol's own braces. The file declares a dozen enums — efforts,
 # skills, agent names — and a greedy match would run from the first into the last
 # and hand back a roster made of every one of them.
-m = re.search(re.escape(sys.argv[2]) + r"\s*:\s*z\.ZodEnum<\s*\{(.*?)\}\s*>", blob, re.S)
-print(json.dumps([v for _, v in re.findall(r'("?[\w-]+"?)\s*:\s*"([^"]+)"', m.group(1))] if m else []))
+# Found in two steps, each linear: the symbol's first declaration, then its closing
+# brace within a fixed window after it. One lazy pattern over the whole file costs
+# the rest of the file per unclosed declaration, which a file of nothing but those
+# turns into hours.
+m = re.search(re.escape(sys.argv[2]) + r"\s*:\s*z\.ZodEnum<\s*\{", blob)
+body = re.match(r"(.{0,65536}?)\}\s*>", blob[m.end():m.end() + 65600], re.S) if m else None
+print(json.dumps([v for _, v in re.findall(r'("?[\w-]{1,64}"?)\s*:\s*"([^"]{1,128})"', body.group(1))] if body else []))
 PYEOF
 )"
   rm -f "$f"
@@ -681,12 +751,21 @@ try:
     blob = open(sys.argv[1], encoding="utf-8", errors="replace").read()
 except OSError:
     print(json.dumps(base)); raise SystemExit
+# Each block is found the way the declarations are: its opening first, then its
+# end within a fixed window after it, so a bundle that opens one a million times and
+# never closes it costs one pass rather than a pass per opening.
+def block(head, tail, limit):
+    m = re.search(head, blob)
+    if not m:
+        return None
+    b = re.match(r"(.{0,%d}?)%s" % (limit, tail), blob[m.end():m.end() + limit + 64], re.S)
+    return b.group(1) if b else None
 alias = {}
-m = re.search(r"var LEGACY_CATEGORY_NAME_ALIASES = \{(.*?)\};", blob, re.S)
-if m:
-    alias = dict(re.findall(r'"?([\w-]+)"?\s*:\s*"([\w-]+)"', m.group(1)))
-t = re.search(r"\nvar CATEGORY_MODEL_REQUIREMENTS = \{\n(.*?)\n\};\n", blob, re.S)
-table = re.findall(r'^  "?([a-z][a-z-]*)"?: \{\s*$', t.group(1), re.M) if t else []
+a = block(r"var LEGACY_CATEGORY_NAME_ALIASES = \{", r"\};", 65536)
+if a is not None:
+    alias = dict(re.findall(r'"?([\w-]{1,64})"?\s*:\s*"([\w-]{1,64})"', a))
+t = block(r"\nvar CATEGORY_MODEL_REQUIREMENTS = \{\n", r"\n\};\n", 262144)
+table = re.findall(r'^  "?([a-z][a-z-]{0,63})"?: \{\s*$', t, re.M) if t is not None else []
 if not alias and not table:
     print(json.dumps(base)); raise SystemExit
 print(json.dumps(sorted({alias.get(n, n) for n in base} | set(table))))
@@ -711,7 +790,7 @@ roster_json() {
   # carry the field sets is still valid JSON and still the right roster, so nothing
   # would ever re-probe for the half that was added — the entry would simply be
   # missing, for as long as neither version moved.
-  key="$(printf '%s|%s|v3' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
+  key="$(printf '%s|%s|v4' "$oc_version" "$omo_version" | sha256sum | cut -c1-16)"
   cache_file="$CACHE/roster-$key.json"
   # Read like everything else: through the descriptor, bounded, and refused if it
   # is not a plain file this user owns. It sits next to the model cache, which
@@ -719,7 +798,11 @@ roster_json() {
   local cached
   if cached="$("$SELF_DIR/safe-read" "$cache_file" --max-bytes "$MAX_STORE_BYTES" \
                  --no-empty --label "the roster cache" 2>/dev/null)"; then
-    if printf '%s' "$cached" | jq -e . >/dev/null 2>&1; then printf '%s' "$cached"; return 0; fi
+    # Held to the same names a probe is: the file sits at a predictable path.
+    cached="$(printf '%s' "$cached" | jq -c "$ROSTER_NAMES"'
+        .opencode.agents |= names | .ohmy.agents |= names | .ohmy.categories |= names
+      | .ohmy.fields.agent |= names | .ohmy.fields.category |= names' 2>/dev/null)" && [ -n "$cached" ] \
+      && { printf '%s' "$cached"; return 0; }
   fi
 
   # `opencode generate` is the slowest thing detect does and the outer timebox is
@@ -738,9 +821,9 @@ roster_json() {
     local schema_p schema_f bundle_f dts
     schema_p="$(omo_schema_file "$pkg")" || schema_p=""
     schema_f=""
-    [ -n "$schema_p" ] && { schema_f="$(read_capped "$schema_p" "$MAX_PACKAGE_BYTES" "the oh-my-openagent schema")" || schema_f=""; }
+    [ -n "$schema_p" ] && { schema_f="$(read_capped "$schema_p" "$MAX_SCHEMA_BYTES" "the oh-my-openagent schema")" || schema_f=""; }
     if [ -n "$schema_f" ]; then
-      om_agents="$(jq -c '[.properties.agents.properties | keys[]]' "$schema_f" 2>/dev/null)"
+      om_agents="$(jq -c "$ROSTER_NAMES"'[.properties.agents.properties | keys[]] | names' "$schema_f" 2>/dev/null)"
       rm -f "$schema_f"
     fi
     # Carried in the roster so the panel can see it, but derived by its own function
@@ -767,9 +850,11 @@ try:
         blob = fh.read()
 except OSError:
     print("[]"); raise SystemExit
-# The bundle is minified onto few lines, so this has to match across newlines.
-m = re.search(r"BuiltinCategoryNameSchema\s*=\s*[A-Za-z_$][\w$]*\.enum\(\s*\[(.*?)\]\s*\)", blob, re.S)
-print(json.dumps(re.findall(r'"([^"]+)"', m.group(1)) if m else []))
+# The bundle is minified onto few lines, so this has to match across newlines. The
+# opening first and the end within a window after it, as with the declarations.
+m = re.search(r"BuiltinCategoryNameSchema\s*=\s*[A-Za-z_$][\w$]{0,64}\.enum\(\s*\[", blob)
+body = re.match(r"(.{0,65536}?)\]\s*\)", blob[m.end():m.end() + 65600], re.S) if m else None
+print(json.dumps(re.findall(r'"([^"]{1,128})"', body.group(1)) if body else []))
 PYEOF
 )"
       [ -n "$bundle_f" ] && rm -f "$bundle_f"
@@ -781,7 +866,10 @@ PYEOF
   local out
   out="$(jq -cn --argjson oca "$oc_agents" --argjson oma "$om_agents" --argjson omc "$om_cats" \
                 --argjson omf "$om_fields" --argjson pkgSeen "$([ -n "$pkg" ] && echo true || echo false)" \
-    '{ opencode: { agents: $oca },
+    "$ROSTER_NAMES"'
+       ($oca | names) as $oca | ($oma | names) as $oma | ($omc | names) as $omc
+     | { agent: ($omf.agent | names), category: ($omf.category | names) } as $omf
+     | { opencode: { agents: $oca },
        ohmy: { agents: $oma, categories: $omc, fields: $omf },
        # What answered and what did not, so `doctor` can say the panel has gone
        # blind rather than quietly drawing the list this plugin was published with.
@@ -847,8 +935,24 @@ write_projected() {
 # profile, or are removed when the profile does not pin that agent; an agent only the
 # profile names gets the profile's model fields and nothing else. The live file's own
 # order is kept.
+#
+# That includes a live file with no agent map at all. Through 1.5.4 a missing map
+# left the profile's own map to be written whole, so a profile captured while
+# agent.build allowed every shell command brought that permission back over a config
+# that had since dropped its agents for a global "ask". A missing map is an empty
+# one now: every entry the profile names goes through the branch for an agent only
+# the profile has. A map that is there and is not an object is refused in preflight.
 MODEL_FIELDS_OPENCODE='["model","variant"]'
 MODEL_FIELDS_OHMY='["model","models","variant","reasoning","fallback_models"]'
+
+# The maps a switch writes into entry by entry, rather than as a whole.
+agent_maps_for() {
+  case "$1" in
+    opencode) printf '%s' '["agent"]' ;;
+    ohmy)     printf '%s' '["agents","categories"]' ;;
+    *)        printf '%s' '[]' ;;
+  esac
+}
 
 keep_live_agents() {
   local logical="$1" payload="$2" live maps fields
@@ -858,16 +962,17 @@ keep_live_agents() {
   # function exists to prevent. The switch stops instead, and is rolled back.
   if [ "$live" = "null" ] && [ -f "$(file_for "$logical")" ]; then return 1; fi
   case "$logical" in
-    opencode) maps='["agent"]'; fields="$MODEL_FIELDS_OPENCODE" ;;
-    ohmy)     maps='["agents","categories"]'; fields="$MODEL_FIELDS_OHMY" ;;
+    opencode) fields="$MODEL_FIELDS_OPENCODE" ;;
+    ohmy)     fields="$MODEL_FIELDS_OHMY" ;;
     *)        printf '%s' "$payload"; return 0 ;;
   esac
+  maps="$(agent_maps_for "$logical")"
   jq -cn --slurpfile live <(printf '%s' "$live") --slurpfile p <(printf '%s' "$payload") \
          --argjson maps "$maps" --argjson mf "$fields" '
     (if ($live[0] | type) == "object" then $live[0] else {} end) as $lv
     | reduce $maps[] as $k ($p[0];
-        $lv[$k] as $lm
-        | if ($lm | type) != "object" then .
+        (if $lv[$k] == null then {} else $lv[$k] end) as $lm
+        | if ($lm | type) != "object" then error("\($k) is not an object")
           else
             ((.[$k]) as $x | if ($x | type) == "object" then $x else {} end) as $pm
             | ([ $lm | keys_unsorted[] ]
@@ -946,6 +1051,7 @@ managed() {
   case "$1" in
     ohmy)     [ "$OC_MANAGE_OHMY" = 1 ] ;;
     opencode) [ "$OC_MANAGE_OPENCODE" = 1 ] ;;
+    *)        return 1 ;;
   esac
 }
 
@@ -974,9 +1080,7 @@ cmd_detect() {
   local oc_version omo_version omo_pkg
   oc_version="$(run_opencode 10 --version 2>/dev/null | head -c 256 | tr -d '\r' || true)"
   omo_pkg="$(omo_package_dir)"
-  omo_version="$([ -n "$omo_pkg" ] && "$SELF_DIR/safe-read" "$omo_pkg/package.json" --follow \
-                   --max-bytes "$MAX_CONFIG_BYTES" --label "the oh-my-openagent package manifest" 2>/dev/null \
-                 | jq -r '.version // ""' 2>/dev/null || true)"
+  omo_version="$([ -n "$omo_pkg" ] && omo_version_at "$omo_pkg" || true)"
 
   local authed
   local auth_f; auth_f="$(read_capped "$AUTH_FILE" "$MAX_AUTH_BYTES" "the opencode auth file")" || auth_f=""
@@ -1149,19 +1253,45 @@ preflight() {
   [ -f "$file" ] || refuse "E_MISSING" "$(basename "$file") does not exist."
   # A .jsonc used to be refused outright because jq cannot read comments. The edit
   # is a splice now, so comments survive it and the file is editable like any other.
-  [ "$(read_projected "$logical")" != "null" ] \
+  local live
+  live="$(read_projected "$logical")"
+  [ "$live" != "null" ] \
     || refuse "E_PARSE" "$(basename "$file") will not parse. Nothing was changed."
   [ -w "$file" ] || refuse "E_PERM" "Cannot write $(basename "$file")."
 
+  # A switch writes into the live agent maps one entry at a time. A map that is there
+  # and is not an object has no entries to keep, and writing over it would change more
+  # than models; opencode refuses to load such a file anyway.
+  local not_map
+  not_map=$(printf '%s' "$live" | jq -r --argjson maps "$(agent_maps_for "$logical")" '
+    . as $d | $maps[] | select(($d[.] | type) as $t | $t != "object" and $t != "null")' 2>/dev/null | head -1)
+  [ -z "$not_map" ] \
+    || refuse "E_AGENT_SHAPE" "\"$not_map\" in $(basename "$file") is not an object. Nothing was changed."
+
   # Every model reference must look like provider/model. A typo here reaches
-  # opencode as an unknown provider and takes the agent down with it.
+  # opencode as an unknown provider and takes the agent down with it. Every place a
+  # switch writes one is checked — the base and small model, each agent's and
+  # category's model, and each entry of a models or fallback_models chain, bare or
+  # as {model: ...} — and only those places: anything else in a payload is never
+  # written. A value of the wrong type is refused like a malformed one, and so is a
+  # payload this check cannot read at all.
   local bad
   bad=$(printf '%s' "$payload" | jq -r '
-    [ .. | objects | select(has("model")) | .model ]
-    | map(select(type=="string")) | map(select(length > 0))
-    | map(select(test("^[A-Za-z0-9~._-]+(/[^/[:space:]]+)+$") | not))
-    | unique | .[]' 2>/dev/null | head -1)
+    def chain: if type == "array" then .[] | (if type == "object" then .model else . end) else . end;
+    def entries: (.agent, .agents, .categories) | objects | .[] | objects;
+    [ .model, .small_model, (.fallback_models | chain),
+      (entries | .model, (.models | chain), (.fallback_models | chain)) ]
+    | map(select(. != null and . != ""))
+    | map(select((type == "string" and test("^[A-Za-z0-9~._-]+(/[^/[:space:]]+)+$")) | not))
+    | if length > 0 then .[0] | (if type == "string" then . else tojson end) else empty end') \
+    || refuse "E_MODEL_SYNTAX" "This profile's models could not be read. Nothing was changed."
   [ -z "$bad" ] || refuse "E_MODEL_SYNTAX" "\"$bad\" is not a provider/model id."
+  local effort
+  effort=$(printf '%s' "$payload" | jq -r '
+    [ (.agent, .agents, .categories) | objects | .[] | objects | .variant, .reasoning
+      | select(. != null and type != "string") ] | if length > 0 then .[0] | tojson else empty end') \
+    || refuse "E_MODEL_SYNTAX" "This profile's efforts could not be read. Nothing was changed."
+  [ -z "$effort" ] || refuse "E_MODEL_SYNTAX" "$effort is not an effort."
 
   # opencode's AgentConfig is an object and its schema has no string branch, so a
   # bare model string under `agent` is a config that will not load. The panel writes
@@ -1223,17 +1353,6 @@ ohmy_forbidden_for() {
     || printf '%s' "$fallback"
 }
 
-# A restore writes a whole file rather than a few keys, so it gets the same gate
-# a forward write does — the one path that used to skip every check.
-preflight_restore() {
-  local dest="$1" src="$2"
-  if [ -e "$dest" ] && [ ! -w "$dest" ]; then refuse "E_PERM" "Cannot write $(basename "$dest")."; fi
-  # A backup is a byte copy of whatever the file was, comments and all, so it is
-  # read back the same way the live file is.
-  "$JSONC" read "$src" >/dev/null 2>&1 \
-    || refuse "E_PARSE" "That backup is not readable any more."
-}
-
 # Deliberately not a pipeline stage: refuse() inside a pipeline exits only the
 # subshell, and an edit that never landed would still be announced as saved.
 store_update() {
@@ -1278,12 +1397,15 @@ profile_models_json() {
     | add // [] | unique' 2>/dev/null || printf '[]'
 }
 
-# Rewrites the state file in the shape it was found: opencode writes it compact.
+# Rewrites the state file in the shape it was found: opencode writes it compact, and
+# a file somebody formatted by hand comes back formatted. The shape is read off the
+# file as it was read, not off the new document, which is always one line.
 # --no-follow, like the read before it: the file is opencode's, at a path anything
 # running as this user can predict, and the read has already refused a link there.
+# write_effort_state <file> <new document> <the file as it was read>
 write_effort_state() {
-  local file="$1" doc="$2"
-  case "$doc" in
+  local file="$1" doc="$2" was="$3"
+  case "$was" in
     *$'\n'*) printf '%s\n' "$doc" | jq . | atomic_write "$file" --no-follow ;;
     *)       printf '%s\n' "$doc" | jq -c . | atomic_write "$file" --no-follow ;;
   esac
@@ -1291,9 +1413,12 @@ write_effort_state() {
 
 # Prints what it forgot as a JSON object {model: effort}, `{}` when there was nothing to
 # do. Never fatal: this is a courtesy on top of a switch that has already succeeded.
-# clear_remembered_efforts <models json array>
+# What is about to be forgotten is written into the switch's backup manifest first,
+# and only then forgotten: the other way round, a run ended between the two writes —
+# or a manifest that could not be written — forgot efforts no undo could bring back.
+# clear_remembered_efforts <models json array> <backup dir>
 clear_remembered_efforts() {
-  local models="$1" file src removed
+  local models="$1" dir="$2" file src removed next
   [ "$OC_CLEAR_EFFORT_MEMORY" = 1 ] || { printf '{}'; return 0; }
   [ "$models" != '[]' ] || { printf '{}'; return 0; }
   file="$(opencode_state_file)"
@@ -1306,9 +1431,14 @@ clear_remembered_efforts() {
     '$m[0] as $m | (.variant // {}) | with_entries(select(.key as $k | ($m | index($k)) != null))' 2>/dev/null)" \
     || { printf '{}'; return 0; }
   case "$removed" in ''|'{}') printf '{}'; return 0 ;; esac
+  next="$("$SELF_DIR/safe-read" "$dir/meta.json" --max-bytes "$MAX_BACKUP_BYTES" \
+            --label "the backup manifest" 2>/dev/null \
+          | jq -c --slurpfile c <(printf '%s' "$removed") '.clearedEfforts = $c[0]' 2>/dev/null)" \
+    && [ -n "$next" ] && printf '%s\n' "$next" | write_private "$dir/meta.json" 2>/dev/null \
+    || { printf '{}'; return 0; }
   write_effort_state "$file" "$(printf '%s' "$src" | jq -c --slurpfile m <(printf '%s' "$models") \
     '$m[0] as $m | if has("variant") then .variant |= with_entries(select(.key as $k | ($m | index($k)) == null)) else . end')" \
-    2>/dev/null || { printf '{}'; return 0; }
+    "$src" 2>/dev/null || { printf '{}'; return 0; }
   printf '%s' "$removed"
 }
 
@@ -1325,8 +1455,13 @@ restore_remembered_efforts() {
            --label "opencode's model state" 2>/dev/null)" || return 0
   printf '%s' "$src" | jq -e 'type == "object" and ((.variant // {}) | type == "object")' \
     >/dev/null 2>&1 || return 0
-  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --slurpfile c <(printf '%s' "$cleared") \
-    '.variant = ($c[0] + (.variant // {}))')" 2>/dev/null || true
+  # Only what clearing could have taken out: an effort, under a model id. The record
+  # sits in a folder anything running as this user can write.
+  write_effort_state "$file" "$(printf '%s' "$src" | jq -c --slurpfile c <(printf '%s' "$cleared") '
+      ($c[0] | with_entries(select(
+          (.key | test("^[A-Za-z0-9~._-]+(/[^/[:space:]]+)+$"))
+          and (.value | type == "string" and length <= 32)))) as $c
+    | .variant = ($c + (.variant // {}))')" "$src" 2>/dev/null || true
 }
 
 # ---------------------------------------------------------------- apply
@@ -1347,7 +1482,11 @@ cmd_apply() {
 
   # Preflight everything before touching anything. A profile that would fail on
   # its second file must not have written its first.
+  # Each target's file is found once, here, and that path is the one backed up,
+  # written and, on a failure, put back. Found again at each step, a migration that
+  # moved the config in between would have one file copied and another overwritten.
   local logical payload file
+  local -A path_of=()
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
@@ -1355,7 +1494,13 @@ cmd_apply() {
     payload=$(printf '%s' "$target" | jq -c '.payload // {}')
     file="$(file_for "$logical")"
     preflight "$logical" "$payload" "$file"
+    path_of[$logical]="$file"
   done <<< "$targets"
+  # A switch that would write nothing is not one. Recorded as one, it named a profile
+  # active that had changed nothing and pointed Undo at a backup holding nothing,
+  # which also left the backup Undo really needed open to pruning.
+  [ "${#path_of[@]}" -gt 0 ] \
+    || refuse "E_NOTHING_TO_APPLY" "Nothing in \"$id\" applies here: each file it describes is missing or turned off in the settings."
 
   stamp="$(new_backup_stamp)"
   dir="$BACKUPS/$stamp"
@@ -1369,8 +1514,8 @@ cmd_apply() {
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
-    applicable "$logical" || continue
-    file="$(file_for "$logical")"
+    [ -n "${path_of[$logical]:-}" ] || continue
+    file="${path_of[$logical]}"
     backup_copy "$file" "$dir/$logical.json" || refuse "E_PERM" "Cannot back up $(basename "$file")."
     backup_files=$(jq -cn --argjson acc "$backup_files" --arg l "$logical" --arg p "$file" \
       --arg fp "$(fingerprint_logical "$logical")" \
@@ -1384,15 +1529,17 @@ cmd_apply() {
 
   # Write. Any failure rolls every already-written file back from the copies
   # above, so a switch is all of itself or none of it.
-  local wrote=()
   local rc=0
-  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=()
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
-    applicable "$logical" || continue
+    [ -n "${path_of[$logical]:-}" ] || continue
+    file="${path_of[$logical]}"
+    # The splice below reads the file by name. If the name now leads elsewhere,
+    # what it would read is not what was copied above.
+    [ "$(file_for "$logical")" = "$file" ] || { rc=1; break; }
     payload=$(printf '%s' "$target" | jq -c '.payload // {}')
-    file="$(file_for "$logical")"
 
     # A key the profile carries is assigned and a managed key it omits is deleted — but
     # inside the agent maps only the model fields move; see keep_live_agents.
@@ -1403,7 +1550,7 @@ cmd_apply() {
 
     # Recorded before the write, not after: a write that fails part-way is
     # exactly the one the rollback has to cover.
-    wrote+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")
+    OC_ROLLBACK_WROTE+=("$logical"); OC_ROLLBACK_PATH[$logical]="$file"
     if ! write_projected "$logical" "$payload" "$mkeys" | atomic_write "$file"; then
       rc=1; break
     fi
@@ -1411,23 +1558,58 @@ cmd_apply() {
     applied+=("$logical")
   done <<< "$targets"
 
+  # The switch is not done until it is on record: what each write left, kept beside
+  # the copy it can be undone from, and the store pointed at both. Until then a
+  # failure — or the timebox's signal — still puts every file back, so the store
+  # never names a switch the disk does not hold, and the disk never holds one with
+  # no way back. Through 1.5.4 a store that could not be updated here answered
+  # "refused, nothing written" over configs that had already changed.
+  local l why="E_WRITE"
+  if [ "$rc" -eq 0 ]; then
+    for l in "${applied[@]:-}"; do
+      [ -n "$l" ] || continue
+      record_written "$dir" "$l" "${path_of[$l]}" || { rc=1; break; }
+    done
+  fi
+  if [ "$rc" -eq 0 ]; then
+    # Stamp the store with fresh fingerprints read back off the files we just
+    # wrote, so drift is measured against reality rather than against intent.
+    local new_targets='[]' fp
+    for l in "${applied[@]:-}"; do
+      [ -n "$l" ] || continue
+      fp="$(fingerprint_logical "$l")"
+      new_targets=$(jq -cn --argjson acc "$new_targets" --arg l "$l" --arg fp "$fp" '$acc + [{file:$l, fingerprint:$fp}]')
+    done
+    # In a subshell: store_update refuses by exiting, and a refusal here is not the
+    # end of this command but the reason to put the files back.
+    ( store_update --arg id "$id" --arg from "$from_id" --arg at "$(now_iso)" --arg backup "$stamp" \
+       --argjson fps "$new_targets" '
+       .state.previousProfileId = (if $from == "" then null else $from end)
+     | .state.activeProfileId = $id
+     | .state.appliedAt = $at
+     | .state.lastBackup = $backup
+     | .profiles = ( .profiles | map(
+         if .id == $id then
+           .targets = ( .targets | map( . as $t
+             | ([$fps[] | select(.file == $t.file) | .fingerprint] | first) as $fp
+             | if $fp then .fingerprint = $fp else . end ) )
+         else . end ) )
+     ' ) >/dev/null 2>&1 || { rc=1; why="E_STORE"; }
+  fi
+
   if [ "$rc" -ne 0 ]; then
-    local l
     # atomic_write, not `cp`: cp truncates and then streams, so a signal landing
     # inside it leaves a half-written config — the one outcome this design exists
     # to prevent, arriving on the path taken when things have already gone wrong.
-    local unrestored=0
-    for l in "${wrote[@]:-}"; do
-      [ -n "$l" ] || continue
-      "$SELF_DIR/safe-read" "$dir/$l.json" --max-bytes "$MAX_BACKUP_BYTES" --label "that backup" \
-        2>/dev/null | atomic_write "$(file_for "$l")" 2>/dev/null || unrestored=$((unrestored + 1))
-    done
-    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+    rollback_writes
     # Said as it is. A put-back that itself failed is not a config put back, and the
     # one thing worth telling the user then is where the copy is.
-    if [ "$unrestored" -eq 0 ]; then
-      jq -cn --arg backup "$stamp" \
-        '{ok:false, code:"E_WRITE", message:"The write failed and the previous config was put back.", backup:$backup}'
+    if [ "$OC_UNRESTORED" -eq 0 ]; then
+      jq -cn --arg backup "$stamp" --arg code "$why" \
+        '{ok:false, code:$code,
+          message:(if $code == "E_STORE" then "The switch could not be recorded, so the previous config was put back."
+                   else "The write failed and the previous config was put back." end),
+          backup:$backup}'
     else
       jq -cn --arg backup "$stamp" --arg dir "$dir" \
         '{ok:false, code:"E_RESTORE", message:("The write failed, and putting the previous config back failed too. The copy taken before the switch is in " + $dir + "."), backup:$backup}'
@@ -1435,46 +1617,18 @@ cmd_apply() {
     exit 3
   fi
 
-  # Past here the configs on disk are the ones the profile asked for, so a signal
-  # must not put the previous ones back over them.
-  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  # Past here the configs on disk are the ones the profile asked for, and the store
+  # says so, so a signal must not put the previous ones back over them.
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
 
   local applied_targets='' efforts_reset='{}'
   while IFS= read -r target; do
     [ -n "$target" ] || continue
     logical=$(printf '%s' "$target" | jq -r '.file')
-    applicable "$logical" || continue
+    [ -n "${path_of[$logical]:-}" ] || continue
     applied_targets+="$target"$'\n'
   done <<< "$targets"
-  efforts_reset="$(clear_remembered_efforts "$(profile_models_json "$applied_targets")")"
-  if [ "$efforts_reset" != '{}' ]; then
-    "$SELF_DIR/safe-read" "$dir/meta.json" --max-bytes "$MAX_BACKUP_BYTES" 2>/dev/null \
-      | jq --slurpfile c <(printf '%s' "$efforts_reset") '.clearedEfforts = $c[0]' 2>/dev/null \
-      | write_private "$dir/meta.json" 2>/dev/null || true
-  fi
-
-  # Stamp the store with fresh fingerprints read back off the files we just
-  # wrote, so drift is measured against reality rather than against intent.
-  local new_targets='[]' l fp
-  for l in "${applied[@]:-}"; do
-    [ -n "$l" ] || continue
-    fp="$(fingerprint_logical "$l")"
-    new_targets=$(jq -cn --argjson acc "$new_targets" --arg l "$l" --arg fp "$fp" '$acc + [{file:$l, fingerprint:$fp}]')
-  done
-
-  store_update --arg id "$id" --arg from "$from_id" --arg at "$(now_iso)" --arg backup "$stamp" \
-     --argjson fps "$new_targets" '
-     .state.previousProfileId = (if $from == "" then null else $from end)
-   | .state.activeProfileId = $id
-   | .state.appliedAt = $at
-   | .state.lastBackup = $backup
-   | .profiles = ( .profiles | map(
-       if .id == $id then
-         .targets = ( .targets | map( . as $t
-           | ([$fps[] | select(.file == $t.file) | .fingerprint] | first) as $fp
-           | if $fp then .fingerprint = $fp else . end ) )
-       else . end ) )
-   '
+  efforts_reset="$(clear_remembered_efforts "$(profile_models_json "$applied_targets")" "$dir")"
 
   prune_backups
 
@@ -1494,8 +1648,15 @@ cmd_revert() {
   ensure_state
   take_lock
 
-  local ts
-  ts="${1:-$(store_jq -r '.state.lastBackup // ""')}"
+  local ts="" force=0 a
+  for a in "$@"; do
+    case "$a" in
+      --force) force=1 ;;
+      *) [ -z "$ts" ] || refuse "E_NO_BACKUP" "Name one backup to go back to."
+         ts="$a" ;;
+    esac
+  done
+  [ -n "$ts" ] || ts="$(store_jq -r '.state.lastBackup // ""')"
   [ -n "$ts" ] || refuse "E_NO_BACKUP" "There is no backup to go back to."
   # A backup name is a timestamp this script wrote. Anything else is not a
   # backup, and a path fragment is certainly not one.
@@ -1509,56 +1670,32 @@ cmd_revert() {
     *) refuse "E_NO_BACKUP" "\"$ts\" is not a backup name." ;;
   esac
   local dir="$BACKUPS/$ts"
+  # A folder this script made, not a link to one somewhere else: the copies and the
+  # manifest naming them would come from wherever the link pointed.
+  { [ -d "$dir" ] && [ ! -L "$dir" ]; } || refuse "E_NO_BACKUP" "Backup $ts is gone."
   [ -s "$dir/meta.json" ] || refuse "E_NO_BACKUP" "Backup $ts is gone or empty."
 
-  # A revert is a write like any other, so it gets its own backup first: undo
-  # has to be undoable or it is just a second way to lose the config.
-  local stamp new_dir
-  stamp="$(new_backup_stamp)"; new_dir="$BACKUPS/$stamp"
-  make_backup_dir "$new_dir" || refuse "E_PERM" "Cannot create a backup directory."
-
-  local files logical path
-  local meta_f
-  meta_f="$(read_capped "$dir/meta.json" "$MAX_BACKUP_BYTES" "that backup's manifest")" \
+  local files logical path meta_f
+  # The manifest is this plugin's own file, so a link at its name is not followed.
+  meta_f="$(mktemp_tracked)" || refuse "E_PERM" "Cannot read that backup."
+  "$SELF_DIR/safe-read" "$dir/meta.json" --max-bytes "$MAX_BACKUP_BYTES" \
+      --label "that backup's manifest" > "$meta_f" 2>/dev/null \
     || refuse "E_NO_BACKUP" "Backup $ts cannot be read."
-  files=$(jq -c '.files[]' "$meta_f" 2>/dev/null) || { rm -f "$meta_f"; refuse "E_NO_BACKUP" "Backup $ts is not readable any more."; }
+  files=$(jq -c '.files[]' "$meta_f" 2>/dev/null) || refuse "E_NO_BACKUP" "Backup $ts is not readable any more."
+
+  # Gate every restore before performing any of them, and before anything else is
+  # written: a refusal on the second file must not leave the first one already put
+  # back, and a refused undo must not leave a new backup folder behind either — each
+  # one pushed a real backup closer to the prune.
+  local restorable='[]' skipped=() written copy
   while IFS= read -r f; do
     [ -n "$f" ] || continue
     logical=$(printf '%s' "$f" | jq -r '.logical')
     # The manifest names its own files, and a name is also a file name below the
     # backup directory: only the two this script writes are ever taken.
     case "$logical" in opencode|ohmy) ;; *) continue ;; esac
-    path="$(file_for "$logical")"
-    if [ -f "$path" ]; then
-      backup_copy "$path" "$new_dir/$logical.json" \
-        || refuse "E_PERM" "Cannot back up $(basename "$path") before undoing."
-    fi
-  done <<< "$files"
-
-  local to_id new_files='[]'
-  to_id=$(store_jq -r '.state.activeProfileId // ""')
-  # Describe the state this backup actually holds, not the one it is undoing.
-  # Copying the old meta forward made a backup advertise someone else's digests.
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    logical=$(printf '%s' "$f" | jq -r '.logical')
-    [ -f "$new_dir/$logical.json" ] || continue
-    new_files=$(jq -cn --argjson acc "$new_files" --arg l "$logical" --arg p "$(file_for "$logical")" \
-      --arg fp "$(fingerprint_logical "$logical")" '$acc + [{logical:$l, path:$p, fingerprint:$fp}]')
-  done <<< "$files"
-  jq -n --arg ts "$stamp" --arg from "$to_id" --argjson files "$new_files" \
-    '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:null, files:$files}' \
-    | write_private "$new_dir/meta.json" 2>/dev/null \
-    || refuse "E_PERM" "Cannot write the backup manifest."
-
-  # Gate every restore before performing any of them. Checking inside the write
-  # loop meant a refusal on the second file left the first one already rolled
-  # back, under an exit code that promises nothing was written.
-  local restorable='[]'
-  while IFS= read -r f; do
-    [ -n "$f" ] || continue
-    logical=$(printf '%s' "$f" | jq -r '.logical')
-    case "$logical" in opencode|ohmy) ;; *) continue ;; esac
+    # A file the settings say to leave alone is left alone by an undo as well.
+    if ! managed "$logical"; then skipped+=("$logical"); continue; fi
     # The path the backup came FROM, not whatever resolves today.
     path=$(printf '%s' "$f" | jq -r '.path // empty')
     [ -n "$path" ] || path="$(file_for "$logical")"
@@ -1566,71 +1703,123 @@ cmd_revert() {
     # the list because oh-my-openagent's config lives there — without them an undo
     # silently skipped the whole oh-my-openagent half and still reported success.
     restore_target_ok "$logical" "$path" || continue
+    # And only on the file that config is read from today. A copy of the legacy
+    # oh-my-openagent.json, taken before the migration moved the config into
+    # ~/.omo, would land on a leftover nothing reads, while the file that is read
+    # kept the switch and the answer said it was undone.
+    [ "$path" = "$(file_for "$logical")" ] \
+      || refuse "E_MOVED" "That backup is of $(basename "$path"), and the config is read from $(basename "$(file_for "$logical")") now. Nothing was changed."
     # A manifest naming a payload that is not there is a broken backup, not a
     # backup with less in it. Saying so beats reporting a successful undo that
     # restored nothing and still moved the active profile.
     [ -s "$dir/$logical.json" ] \
       || refuse "E_NO_BACKUP" "Backup $ts is missing the copy of $(basename "$path")."
-    preflight_restore "$path" "$dir/$logical.json"
-    restorable=$(jq -cn --argjson acc "$restorable" --arg l "$logical" --arg p "$path" \
-      '$acc + [{logical:$l, path:$p}]')
+    # An undo puts the whole file back, so it only does that over exactly what the
+    # write it undoes left there. Anything else in the file is an edit made since —
+    # a permission tightened, an MCP server removed, a key rotated — and putting a
+    # copy from before the switch back over it would quietly undo that too. A
+    # backup with no record of what was written predates this check, and is held
+    # to it the same way. --force puts the copy back anyway, for a terminal only.
+    if [ "$force" != 1 ]; then
+      written=$(printf '%s' "$f" | jq -r '.written // empty')
+      [ -n "$written" ] \
+        || refuse "E_DRIFT" "That backup was taken by an earlier version of this plugin, which kept no record of what its switch wrote, so undoing it could put back more than the switch changed. Nothing was changed. Switching to a profile changes only models."
+      [ "$(file_digest "$path")" = "$written" ] \
+        || refuse "E_DRIFT" "$(basename "$path") has changed since that switch, and undoing it would put back the whole file as it was before, losing what changed since. Nothing was changed. Switching to a profile changes only models."
+    fi
+    # One read of the copy, checked and then written from: checked through one open
+    # and written through another, the bytes checked need not be the bytes written.
+    copy="$(mktemp_tracked)" || refuse "E_PERM" "Cannot read that backup."
+    "$SELF_DIR/safe-read" "$dir/$logical.json" --max-bytes "$MAX_BACKUP_BYTES" \
+        --label "that backup" > "$copy" 2>/dev/null \
+      || refuse "E_NO_BACKUP" "Backup $ts cannot be read."
+    "$JSONC" read "$copy" >/dev/null 2>&1 \
+      || refuse "E_PARSE" "That backup is not readable any more."
+    if [ -e "$path" ] && [ ! -w "$path" ]; then refuse "E_PERM" "Cannot write $(basename "$path")."; fi
+    restorable=$(jq -cn --argjson acc "$restorable" --arg l "$logical" --arg p "$path" --arg c "$copy" \
+      '$acc + [{logical:$l, path:$p, copy:$c}]')
   done <<< "$files"
 
   [ "$(printf '%s' "$restorable" | jq -r 'length')" != "0" ] \
     || refuse "E_NO_BACKUP" "Backup $ts has nothing in it that can be put back."
 
-  local restored='[]' put_back=() rrc=0
-  OC_ROLLBACK_DIR="$new_dir"; OC_ROLLBACK_WROTE=()
+  # A revert is a write like any other, so it gets its own backup first: undo
+  # has to be undoable or it is just a second way to lose the config.
+  local stamp new_dir to_id new_files='[]' entry
+  stamp="$(new_backup_stamp)"; new_dir="$BACKUPS/$stamp"
+  make_backup_dir "$new_dir" || refuse "E_PERM" "Cannot create a backup directory."
+  to_id=$(store_jq -r '.state.activeProfileId // ""')
+  # Describe the state this backup actually holds, not the one it is undoing.
+  # Copying the old meta forward made a backup advertise someone else's digests.
   while IFS= read -r entry; do
     [ -n "$entry" ] || continue
     logical=$(printf '%s' "$entry" | jq -r '.logical')
     path=$(printf '%s' "$entry" | jq -r '.path')
-    put_back+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")
-    # The backup is a byte copy this tool made, but it lives in a directory anything
-    # running as this user can write, so it is read back under the same rules as
-    # everything else rather than cat'd straight over a config.
-    if ! "$SELF_DIR/safe-read" "$dir/$logical.json" --max-bytes "$MAX_BACKUP_BYTES" \
-         --label "that backup" | atomic_write "$path"; then rrc=1; break; fi
+    [ -f "$path" ] || continue
+    backup_copy "$path" "$new_dir/$logical.json" \
+      || refuse "E_PERM" "Cannot back up $(basename "$path") before undoing."
+    new_files=$(jq -cn --argjson acc "$new_files" --arg l "$logical" --arg p "$path" \
+      --arg fp "$(fingerprint_logical "$logical")" '$acc + [{logical:$l, path:$p, fingerprint:$fp}]')
+  done <<< "$(printf '%s' "$restorable" | jq -c '.[]')"
+  jq -n --arg ts "$stamp" --arg from "$to_id" --argjson files "$new_files" \
+    '{ts:$ts, fromProfileId:(if $from=="" then null else $from end), toProfileId:null, files:$files}' \
+    | write_private "$new_dir/meta.json" 2>/dev/null \
+    || refuse "E_PERM" "Cannot write the backup manifest."
+
+  local back_to
+  back_to=$(jq -r '.fromProfileId // ""' "$meta_f" 2>/dev/null)
+
+  local restored='[]' rrc=0 why="E_WRITE"
+  OC_ROLLBACK_DIR="$new_dir"; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
+  while IFS= read -r entry; do
+    [ -n "$entry" ] || continue
+    logical=$(printf '%s' "$entry" | jq -r '.logical')
+    path=$(printf '%s' "$entry" | jq -r '.path')
+    copy=$(printf '%s' "$entry" | jq -r '.copy')
+    OC_ROLLBACK_WROTE+=("$logical"); OC_ROLLBACK_PATH[$logical]="$path"
+    atomic_write "$path" < "$copy" || { rrc=1; break; }
+    # Read back: what landed has to be a config that reads, and the undo's own
+    # backup records what it left, so the undo can itself be undone.
+    [ "$(read_projected "$logical")" != "null" ] || { rrc=1; break; }
+    record_written "$new_dir" "$logical" "$path" || { rrc=1; break; }
     restored=$(jq -cn --argjson acc "$restored" --arg l "$logical" '$acc + [$l]')
   done <<< "$(printf '%s' "$restorable" | jq -c '.[]')"
 
+  if [ "$rrc" -eq 0 ]; then
+    # A backup taken before any profile was active records no `fromProfileId`, and
+    # older backups predate the field entirely. The config just put back is still
+    # either one of the saved profiles or it is not, and the store should say which:
+    # left null, the panel reports a config that matches "Saved config" exactly as
+    # matching no profile at all.
+    [ -n "$back_to" ] || back_to="$(matching_profile_id)"
+    # Still able to put the files back, as a switch is: an undo the store does not
+    # record would leave Undo pointing at the backup it has just used.
+    ( store_update --arg id "$back_to" --arg prev "$to_id" --arg at "$(now_iso)" --arg backup "$stamp" '
+        .state.activeProfileId = (if $id == "" then null else $id end)
+      | .state.previousProfileId = (if $prev == "" then null else $prev end)
+      | .state.appliedAt = $at
+      | .state.lastBackup = $backup
+    ' ) >/dev/null 2>&1 || { rrc=1; why="E_STORE"; }
+  fi
+
   if [ "$rrc" -ne 0 ]; then
-    local l
-    local unrestored=0
-    for l in "${put_back[@]:-}"; do
-      [ -n "$l" ] || continue
-      [ -f "$new_dir/$l.json" ] || continue
-      "$SELF_DIR/safe-read" "$new_dir/$l.json" --max-bytes "$MAX_BACKUP_BYTES" --label "that backup" \
-        2>/dev/null | atomic_write "$(file_for "$l")" 2>/dev/null || unrestored=$((unrestored + 1))
-    done
-    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
-    if [ "$unrestored" -eq 0 ]; then
-      jq -cn --arg backup "$stamp" \
-        '{ok:false, code:"E_WRITE", message:"The undo failed and the config was put back as it was.", backup:$backup}'
+    rollback_writes
+    if [ "$OC_UNRESTORED" -eq 0 ]; then
+      jq -cn --arg backup "$stamp" --arg code "$why" \
+        '{ok:false, code:$code,
+          message:(if $code == "E_STORE" then "The undo could not be recorded, so the config was put back as it was."
+                   else "The undo failed and the config was put back as it was." end),
+          backup:$backup}'
     else
       jq -cn --arg backup "$stamp" --arg dir "$new_dir" \
         '{ok:false, code:"E_RESTORE", message:("The undo failed, and putting the config back as it was failed too. The copy taken before the undo is in " + $dir + "."), backup:$backup}'
     fi
     exit 3
   fi
-  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
 
-  local back_to
-  back_to=$(jq -r '.fromProfileId // ""' "$meta_f" 2>/dev/null)
   restore_remembered_efforts "$(jq -c '.clearedEfforts // {}' "$meta_f" 2>/dev/null)"
   rm -f "$meta_f"
-  # A backup taken before any profile was active records no `fromProfileId`, and
-  # older backups predate the field entirely. The config just put back is still
-  # either one of the saved profiles or it is not, and the store should say which:
-  # left null, the panel reports a config that matches "Saved config" exactly as
-  # matching no profile at all.
-  [ -n "$back_to" ] || back_to="$(matching_profile_id)"
-  store_update --arg id "$back_to" --arg prev "$to_id" --arg at "$(now_iso)" --arg backup "$stamp" '
-      .state.activeProfileId = (if $id == "" then null else $id end)
-    | .state.previousProfileId = (if $prev == "" then null else $prev end)
-    | .state.appliedAt = $at
-    | .state.lastBackup = $backup
-  '
 
   prune_backups
 
@@ -1638,8 +1827,9 @@ cmd_revert() {
   if [ "$OC_AUTO_RELOAD" = 1 ]; then reloaded="$(reload_opencode)" || reloaded=0; fi
 
   jq -cn --arg ts "$ts" --arg backup "$stamp" --argjson restored "$restored" \
+         --argjson skipped "$(printf '%s\n' "${skipped[@]:-}" | jq -R . | jq -sc 'map(select(length>0))')" \
          --arg id "$back_to" --argjson reloaded "$reloaded" \
-    '{ok:true, reverted:$ts, backup:$backup, restored:$restored,
+    '{ok:true, reverted:$ts, backup:$backup, restored:$restored, skipped:$skipped,
       activeProfileId:(if $id=="" then null else $id end), reloaded:$reloaded}'
 }
 
@@ -1875,6 +2065,8 @@ cmd_seed() {
     return 0
   }
 
+  # The capture released its lock on the way out; the store is not edited without one.
+  take_lock
   store_update --arg id current-config --arg at "$(now_iso)" '
       .state.activeProfileId = $id
     | .state.appliedAt = $at
@@ -2015,13 +2207,20 @@ cmd_backups() {
   # undo, and an unbounded walk of a directory anything can add to is not one.
   # One name per line, read whole: a path with a space in it — a HOME with one — is
   # still one path, where `for d in $(...)` made it two and listed nothing.
+  # Every folder looked at counts, listed or not: counting only the ones that read
+  # let a folder full of empty ones keep this walking until the timebox ended it.
+  # A link is not a backup this script made, and a manifest is read without
+  # following one, as Undo reads it.
   while IFS= read -r d; do
     [ -n "$d" ] || continue
     [ "$n" -lt "$OC_BACKUPS_KEEP" ] || break
-    meta_f="$(read_capped "$d/meta.json" "$MAX_BACKUP_BYTES" "a backup manifest")" || continue
-    if jq -e . "$meta_f" >/dev/null 2>&1; then
+    n=$((n + 1))
+    [ -L "$d" ] && continue
+    meta_f="$(mktemp_tracked)" || continue
+    if "$SELF_DIR/safe-read" "$d/meta.json" --max-bytes "$MAX_BACKUP_BYTES" \
+         --label "a backup manifest" > "$meta_f" 2>/dev/null \
+       && jq -e . "$meta_f" >/dev/null 2>&1; then
       out=$(jq -cn --slurpfile acc <(printf '%s' "$out") --slurpfile m "$meta_f" '$acc[0] + [$m[0]]')
-      n=$((n + 1))
     fi
     rm -f "$meta_f"
   done < <(ls -1d "$BACKUPS"/*/ 2>/dev/null | sed 's:/*$::' | sort -rV)
@@ -2050,7 +2249,16 @@ cmd_doctor() {
   [ -n "$ohmy_doc" ] || ohmy_doc="null"
   [ -n "$opencode_doc" ] || opencode_doc="null"
 
+  # The rows reach jq through a pipe rather than its environment, where one variable
+  # past 128 KiB — a long profile name was enough — failed the exec and lost the
+  # whole Health strip. Names quoted into a row are cut short for the same reason.
   local issues='[]'
+
+  # A repair rewrites a file the settings may say to leave alone; the row is still
+  # reported, but offers no Fix there.
+  local fix_opencode=false fix_ohmy=false
+  managed opencode && fix_opencode=true
+  managed ohmy && fix_ohmy=true
 
   # A bare model string under `agent` is a config opencode will not load —
   # the same shape the apply preflight refuses as E_AGENT_SHAPE.
@@ -2058,10 +2266,11 @@ cmd_doctor() {
     local k
     while IFS= read -r k; do
       [ -n "$k" ] || continue
-      issues="$(jq -cn --argjson acc "$issues" --arg f "$opencode" --arg k "$k" \
-        '$acc + [{code:"E_BARE_AGENT_STRING", file:$f, profile:"", agent:$k,
+      issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg f "$opencode" --arg k "${k:0:80}" \
+        --argjson fx "$fix_opencode" \
+        '$acc[0] + [{code:"E_BARE_AGENT_STRING", file:$f, profile:"", agent:$k,
                   detail:("agent." + $k + " is a bare model string; opencode needs { \"model\": ... } there."),
-                  fixable:true, fix:"E_BARE_AGENT_STRING"}]')"
+                  fixable:$fx, fix:(if $fx then "E_BARE_AGENT_STRING" else "" end)}]')"
     done < <(printf '%s' "$opencode_doc" | jq -r \
       '(.agent // {}) | to_entries[] | select(.value | type != "object") | .key // empty' 2>/dev/null)
   fi
@@ -2071,10 +2280,10 @@ cmd_doctor() {
   # key, which is a different thing that happens to share a name.
   if [ "$unified" = true ] && [ "$ohmy_doc" != "null" ]; then
     if printf '%s' "$ohmy_doc" | jq -e 'has("fallback_models")' >/dev/null 2>&1; then
-      issues="$(jq -cn --argjson acc "$issues" --arg f "$ohmy" \
-        '$acc + [{code:"E_FILE_FALLBACK", file:$f, profile:"", agent:"",
+      issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg f "$ohmy" --argjson fx "$fix_ohmy" \
+        '$acc[0] + [{code:"E_FILE_FALLBACK", file:$f, profile:"", agent:"",
                   detail:"[opencode] has a file-level fallback_models key, which the unified config does not accept.",
-                  fixable:true, fix:"E_FILE_FALLBACK"}]')"
+                  fixable:$fx, fix:(if $fx then "E_FILE_FALLBACK" else "" end)}]')"
     fi
   fi
 
@@ -2086,25 +2295,30 @@ cmd_doctor() {
   # One row per profile rather than per agent. A migration rewrites every entry
   # it touches, so the per-agent list is two dozen rows saying one thing, and
   # the repair is one button either way.
-  local raw
+  #
+  # Only where the installed oh-my-openagent has no `models` on an agent. 5.x
+  # declares it, and the switch gate already lets it through there; reporting it as
+  # broken drew a red strip over a working config and offered to rewrite it.
+  local raw agent_models_ok=false
+  ohmy_agent_models_ok && agent_models_ok=true
   raw="$(read_store 2>/dev/null)" || raw="$EMPTY_STORE"
-  if printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
+  if [ "$agent_models_ok" = false ] && printf '%s' "$raw" | jq -e . >/dev/null 2>&1; then
     local row pid pname pcount
     while IFS= read -r row; do
       [ -n "$row" ] || continue
       pid="$(printf '%s' "$row" | jq -r '.profile')"
       pname="$(printf '%s' "$row" | jq -r '.name')"
       pcount="$(printf '%s' "$row" | jq -r '.count')"
-      issues="$(jq -cn --argjson acc "$issues" --arg f "$PROFILES" \
+      issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg f "$PROFILES" \
         --arg p "$pid" --arg n "$pname" --argjson c "$pcount" \
-        '$acc + [{code:"E_MODELS_IN_PROFILE", file:$f, profile:$p, agent:"", count:$c,
+        '$acc[0] + [{code:"E_MODELS_IN_PROFILE", file:$f, profile:$p, agent:"", count:$c,
                   detail:("profile \"" + $n + "\": " + ($c|tostring)
                           + (if $c == 1 then " agent sets" else " agents set" end)
                           + " \"models\", which oh-my-openagent has no field for and strips at startup, leaving them with no model."),
                   fixable:true, fix:"E_MODELS_IN_PROFILE"}]')"
     done < <(printf '%s' "$raw" | jq -c '
       .profiles[]?
-      | .id as $pid | (.name // .id) as $pname
+      | .id as $pid | (.name // .id | tostring | .[0:80]) as $pname
       | [ .targets[]? | select(.file == "ohmy")
           | (.payload.agents // {}) | to_entries[]
           | select(.value | type == "object" and has("models")) ] as $hit
@@ -2116,18 +2330,19 @@ cmd_doctor() {
   # migrate` puts it: the file validates, the plugin starts, and every agent it
   # touched quietly runs on a default. Nothing else reports this, because
   # nothing else reads the schema that dropped the key.
-  if [ "$ohmy_doc" != "null" ]; then
+  if [ "$agent_models_ok" = false ] && [ "$ohmy_doc" != "null" ]; then
     local live_models
     live_models="$(printf '%s' "$ohmy_doc" | jq -r \
       '[(.agents // {}) | to_entries[] | select(.value | type == "object" and has("models"))] | length' 2>/dev/null)"
     case "$live_models" in ''|*[!0-9]*) live_models=0 ;; esac
     if [ "$live_models" -gt 0 ]; then
-      issues="$(jq -cn --argjson acc "$issues" --arg f "$ohmy" --argjson c "$live_models" \
-        '$acc + [{code:"E_MODELS_IN_CONFIG", file:$f, profile:"", agent:"", count:$c,
+      issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg f "$ohmy" --argjson c "$live_models" \
+        --argjson fx "$fix_ohmy" \
+        '$acc[0] + [{code:"E_MODELS_IN_CONFIG", file:$f, profile:"", agent:"", count:$c,
                   detail:(($c|tostring)
                           + (if $c == 1 then " agent in" else " agents in" end)
                           + " your oh-my-openagent config set \"models\", which its own schema drops on load — those agents are running on a default, not on the model you pinned."),
-                  fixable:true, fix:"E_MODELS_IN_CONFIG"}]')"
+                  fixable:$fx, fix:(if $fx then "E_MODELS_IN_CONFIG" else "" end)}]')"
     fi
   fi
 
@@ -2138,28 +2353,31 @@ cmd_doctor() {
     for legacy in "$CFG_DIR/oh-my-openagent.jsonc" "$CFG_DIR/oh-my-openagent.json" \
                  "$CFG_DIR/oh-my-opencode.jsonc" "$CFG_DIR/oh-my-opencode.json"; do
       if [ -f "$legacy" ]; then
-        issues="$(jq -cn --argjson acc "$issues" --arg f "$legacy" \
-          '$acc + [{code:"W_LEGACY_OHMY", file:$f, profile:"", agent:"",
+        issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg f "$legacy" \
+          '$acc[0] + [{code:"W_LEGACY_OHMY", file:$f, profile:"", agent:"",
                     detail:"A legacy oh-my-openagent file exists while the unified ~/.omo config is active; it is no longer read.",
                     fixable:false, fix:""}]')"
       fi
     done
   fi
 
-  # `variant` is the old spelling of `reasoning`. Both still load — the plugin
+  # `variant` is the old spelling of `reasoning` on 4.x. Both still load — the plugin
   # normalises one into the other at read time — so this is information only,
   # and one line rather than one line per entry: a config is migrated all at
   # once, so the count is the only part that differs between the rows.
-  # No automatic repair renames a field that still works.
-  if [ "$ohmy_doc" != "null" ]; then
+  # No automatic repair renames a field that still works. 5.x went back to
+  # `variant`, so there it is the current spelling and nothing is said.
+  local omo_major
+  omo_major="$(omo_version_at "$(omo_package_dir)" 2>/dev/null)"; omo_major="${omo_major%%.*}"
+  if [ "$omo_major" = 4 ] && [ "$ohmy_doc" != "null" ]; then
     local vcount
     vcount="$(printf '%s' "$ohmy_doc" | jq -r '
       [ ((.agents // {}), (.categories // {})) | to_entries[]
         | select(.value | type == "object" and has("variant")) ] | length' 2>/dev/null)"
     case "$vcount" in ''|*[!0-9]*) vcount=0 ;; esac
     if [ "$vcount" -gt 0 ]; then
-      issues="$(jq -cn --argjson acc "$issues" --arg f "$ohmy" --argjson c "$vcount" \
-        '$acc + [{code:"W_VARIANT_DEPRECATED", file:$f, profile:"", agent:"", count:$c,
+      issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg f "$ohmy" --argjson c "$vcount" \
+        '$acc[0] + [{code:"W_VARIANT_DEPRECATED", file:$f, profile:"", agent:"", count:$c,
                   detail:(($c|tostring) + " entries use \"variant\"; the current spelling is \"reasoning\". Both are read, so nothing is broken."),
                   fixable:false, fix:""}]')"
     fi
@@ -2186,8 +2404,8 @@ cmd_doctor() {
         case "$probe_cats" in ''|null|'[]') blind="the category list" ;; esac
       fi
       if [ -n "$blind" ]; then
-        issues="$(jq -cn --argjson acc "$issues" --arg w "$blind" --arg p "$pkg" \
-          '$acc + [{code:"W_PROBE_BLIND", file:$p, profile:"", agent:"",
+        issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg w "$blind" --arg p "$pkg" \
+          '$acc[0] + [{code:"W_PROBE_BLIND", file:$p, profile:"", agent:"",
                     detail:("This plugin can no longer read " + $w + " out of the installed oh-my-openagent, so it is drawing the one it shipped with. Agents or categories added since then will be missing."),
                     fixable:false, fix:""}]')"
       fi
@@ -2201,13 +2419,13 @@ cmd_doctor() {
     local pkg="" pf="" ver=""
     pkg="$(omo_package_dir)" || pkg=""
     if [ -n "$pkg" ]; then
-      pf="$(read_capped "$pkg/package.json" "$MAX_PACKAGE_BYTES" "the oh-my-openagent package manifest")" || pf=""
+  pf="$(read_capped "$pkg/package.json" "$MAX_MANIFEST_BYTES" "the oh-my-openagent package manifest")" || pf=""
       if [ -n "$pf" ]; then
         ver="$(jq -r '.version // ""' "$pf" 2>/dev/null)"; rm -f "$pf"
         case "$ver" in
           [0-3].*)
-            issues="$(jq -cn --argjson acc "$issues" --arg v "$ver" \
-              '$acc + [{code:"W_OUTDATED_OMO", file:"", profile:"", agent:"",
+            issues="$(jq -cn --slurpfile acc <(printf '%s' "$issues") --arg v "$ver" \
+              '$acc[0] + [{code:"W_OUTDATED_OMO", file:"", profile:"", agent:"",
                         detail:("oh-my-openagent " + $v + " predates the unified config; consider upgrading."),
                         fixable:false, fix:""}]')" ;;
         esac
@@ -2288,6 +2506,38 @@ claim_backup() {
   store_update --arg backup "$stamp" '.state.lastBackup = $backup'
 }
 
+# A repair whose write did not land: the file goes back to the copy taken first, and
+# the answer says whether that worked rather than assuming it did.
+# repair_failed <backup dir> <logical> <file> <stamp> <what happened>
+repair_failed() {
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
+  if "$SELF_DIR/safe-read" "$1/$2.json" --max-bytes "$MAX_BACKUP_BYTES" \
+       --label "that backup" 2>/dev/null | atomic_write "$3" 2>/dev/null; then
+    jq -cn --arg backup "$4" --arg m "$5" \
+      '{ok:false, code:"E_WRITE", message:($m + " and the previous config was put back."), backup:$backup}'
+  else
+    jq -cn --arg backup "$4" --arg m "$5" --arg dir "$1" \
+      '{ok:false, code:"E_RESTORE", message:($m + ", and putting the previous config back failed too. The copy taken before the repair is in " + $dir + "."), backup:$backup}'
+  fi
+  exit 3
+}
+
+# A repair that landed is the one Undo restores next, which takes a record of what
+# it left on disk and the store pointed at its backup. A repair that cannot be
+# recorded is put back rather than left with no way back.
+# repair_landed <backup dir> <logical> <file> <stamp>
+repair_landed() {
+  record_written "$1" "$2" "$3" || repair_failed "$1" "$2" "$3" "$4" "The repair could not be recorded"
+  ( claim_backup "$4" ) >/dev/null 2>&1 || repair_failed "$1" "$2" "$3" "$4" "The repair could not be recorded"
+}
+
+# Whether the installed oh-my-openagent reads `models` on an agent. 5.x declares it;
+# 4.19 dropped it on load. Asked of the schema the install ships, as the write gate
+# asks, so `doctor` never calls broken a shape the same install writes and reads.
+ohmy_agent_models_ok() {
+  ohmy_forbidden_for agent | jq -e 'index("models") == null' >/dev/null 2>&1
+}
+
 # One entry's `models` array, turned back into the pair the schema does have.
 # `models[0]` is the pin, so it promotes into `model` when the entry has none of
 # its own; the rest become `fallback_models`, with anything naming the pin again
@@ -2332,6 +2582,8 @@ repair_models() {
   local id="$1" apply="$2"
   [ -n "$id" ] || refuse "E_NO_PROFILE" "Repairing E_MODELS_IN_PROFILE needs --profile <id>."
   ensure_state
+  ohmy_agent_models_ok \
+    && refuse "E_NOT_FIXABLE" "This oh-my-openagent reads \"models\" on an agent, so there is nothing to repair."
   [ "$apply" = 1 ] && take_lock
 
   local profile
@@ -2425,6 +2677,10 @@ repair_models() {
 repair_models_config() {
   local apply="$1"
   ensure_state
+  managed ohmy \
+    || refuse "E_NOT_MANAGED" "Managing oh-my-openagent's config is turned off in the settings, so it is not repaired here."
+  ohmy_agent_models_ok \
+    && refuse "E_NOT_FIXABLE" "This oh-my-openagent reads \"models\" on an agent, so there is nothing to repair."
   [ "$apply" = 1 ] && take_lock
 
   local file doc
@@ -2482,16 +2738,9 @@ repair_models_config() {
     | write_private "$dir/meta.json" 2>/dev/null \
     || refuse "E_PERM" "Cannot write the backup manifest."
 
-  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
-  if ! write_projected ohmy "$payload" "$mkeys" | atomic_write "$file"; then
-    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
-    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
-    jq -cn --arg backup "$stamp" \
-      '{ok:false, code:"E_WRITE", message:"The repair failed and the previous config was put back.", backup:$backup}'
-    exit 3
-  fi
-  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy); OC_ROLLBACK_PATH=([ohmy]="$file")
+  write_projected ohmy "$payload" "$mkeys" | atomic_write "$file" \
+    || repair_failed "$dir" ohmy "$file" "$stamp" "The repair failed"
 
   # Read back rather than trust the write: a splice that landed but left a
   # `models` behind is the one outcome this repair exists to prevent.
@@ -2503,15 +2752,10 @@ repair_models_config() {
       '(.agents // {}) | to_entries[] | select(.value | type == "object" and has("models")) | .key // empty' 2>/dev/null \
       | head -1)
   fi
-  if [ -n "$left" ]; then
-    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
-    jq -cn --arg backup "$stamp" \
-      '{ok:false, code:"E_WRITE", message:"The repair did not land and the previous config was put back.", backup:$backup}'
-    exit 3
-  fi
+  [ -z "$left" ] || repair_failed "$dir" ohmy "$file" "$stamp" "The repair did not land"
 
-  claim_backup "$stamp"
+  repair_landed "$dir" ohmy "$file" "$stamp"
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
   prune_backups
   warn "repair: backup $stamp"
   jq -cn --argjson n "$fixed" '{ok:true, fixed:$n}'
@@ -2522,6 +2766,8 @@ repair_models_config() {
 repair_bare() {
   local apply="$1"
   ensure_state
+  managed opencode \
+    || refuse "E_NOT_MANAGED" "Managing opencode.json is turned off in the settings, so it is not repaired here."
   [ "$apply" = 1 ] && take_lock
 
   local file doc
@@ -2584,16 +2830,9 @@ repair_bare() {
     | write_private "$dir/meta.json" 2>/dev/null \
     || refuse "E_PERM" "Cannot write the backup manifest."
 
-  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(opencode)
-  if ! write_projected opencode "$payload" "$mkeys" | atomic_write "$file"; then
-    "$SELF_DIR/safe-read" "$dir/opencode.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
-    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
-    jq -cn --arg backup "$stamp" \
-      '{ok:false, code:"E_WRITE", message:"The repair failed and the previous config was put back.", backup:$backup}'
-    exit 3
-  fi
-  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(opencode); OC_ROLLBACK_PATH=([opencode]="$file")
+  write_projected opencode "$payload" "$mkeys" | atomic_write "$file" \
+    || repair_failed "$dir" opencode "$file" "$stamp" "The repair failed"
 
   local check left
   check="$(read_projected opencode)"
@@ -2603,15 +2842,10 @@ repair_bare() {
       '(.agent // {}) | to_entries[] | select(.value | type != "object") | .key // empty' 2>/dev/null \
       | head -1)
   fi
-  if [ -n "$left" ]; then
-    "$SELF_DIR/safe-read" "$dir/opencode.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
-    jq -cn --arg backup "$stamp" \
-      '{ok:false, code:"E_WRITE", message:"The repair did not land and the previous config was put back.", backup:$backup}'
-    exit 3
-  fi
+  [ -z "$left" ] || repair_failed "$dir" opencode "$file" "$stamp" "The repair did not land"
 
-  claim_backup "$stamp"
+  repair_landed "$dir" opencode "$file" "$stamp"
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
   prune_backups
   warn "repair: backup $stamp"
   jq -cn --argjson n "$fixed" '{ok:true, fixed:$n}'
@@ -2622,6 +2856,8 @@ repair_bare() {
 repair_fallback() {
   local apply="$1"
   ensure_state
+  managed ohmy \
+    || refuse "E_NOT_MANAGED" "Managing oh-my-openagent's config is turned off in the settings, so it is not repaired here."
   [ "$apply" = 1 ] && take_lock
 
   local file scope doc
@@ -2662,31 +2898,21 @@ repair_fallback() {
     | write_private "$dir/meta.json" 2>/dev/null \
     || refuse "E_PERM" "Cannot write the backup manifest."
 
-  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy)
+  OC_ROLLBACK_DIR="$dir"; OC_ROLLBACK_WROTE=(ohmy); OC_ROLLBACK_PATH=([ohmy]="$file")
   # An empty payload over a managed key deletes it — through the same projected
   # write as everything else, rather than a second copy of how one is spelled.
-  if ! write_projected ohmy '{}' '["fallback_models"]' | atomic_write "$file"; then
-    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
-    OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
-    jq -cn --arg backup "$stamp" \
-      '{ok:false, code:"E_WRITE", message:"The repair failed and the previous config was put back.", backup:$backup}'
-    exit 3
-  fi
-  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=()
+  write_projected ohmy '{}' '["fallback_models"]' | atomic_write "$file" \
+    || repair_failed "$dir" ohmy "$file" "$stamp" "The repair failed"
 
   local check
   check="$(read_projected ohmy)"
   if [ -z "$check" ] || [ "$check" = "null" ] \
      || printf '%s' "$check" | jq -e 'has("fallback_models")' >/dev/null 2>&1; then
-    "$SELF_DIR/safe-read" "$dir/ohmy.json" --max-bytes "$MAX_BACKUP_BYTES" \
-      --label "that backup" 2>/dev/null | atomic_write "$file" 2>/dev/null || true
-    jq -cn --arg backup "$stamp" \
-      '{ok:false, code:"E_WRITE", message:"The repair did not land and the previous config was put back.", backup:$backup}'
-    exit 3
+    repair_failed "$dir" ohmy "$file" "$stamp" "The repair did not land"
   fi
 
-  claim_backup "$stamp"
+  repair_landed "$dir" ohmy "$file" "$stamp"
+  OC_ROLLBACK_DIR=""; OC_ROLLBACK_WROTE=(); OC_ROLLBACK_PATH=()
   prune_backups
   warn "repair: backup $stamp"
   jq -cn '{ok:true, fixed:1}'
@@ -2701,7 +2927,9 @@ oc-profiles — read and switch opencode model profiles
   capture <name> [id]       save the live config as a new profile
   seed                      on an empty store, save the live config as the first profile
   apply <id>                switch to a profile (backs up, writes, reloads)
-  revert [<backup-ts>]      put the previous config back
+  revert [--force] [<backup-ts>]
+                            put the file back as it was before the last switch or repair;
+                            refused when the file has changed since, unless --force
   save                      upsert a profile object from stdin or $OC_PROFILE_JSON
   delete <id>               remove a profile
   prefs                     upsert {favorites,recents} from stdin or $OC_PREFS_JSON
