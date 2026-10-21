@@ -79,9 +79,9 @@
       {
         "key": "manageOhMyOpenAgent",
         "type": "boolean",
-        "label": "Manage oh-my-openagent.json",
+        "label": "Manage oh-my-openagent's config",
         "defaultValue": true,
-        "description": "The per-agent and per-category models that the oh-my-openagent plugin reads. Ignored when that file does not exist."
+        "description": "The per-agent and per-category models in ~/.omo/omo.jsonc, or in the older oh-my-openagent.json while that is still the file in use. Ignored when neither exists."
       },
       {
         "key": "keepBackups",

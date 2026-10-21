@@ -64,9 +64,12 @@ An Omarchy **Quattro** shell plugin (`bar-widget`). Needs `omarchy-shell`, `open
 Every file it reads from outside its own checkout goes through `bin/safe-read`: one
 open with `O_NOFOLLOW` and `O_NONBLOCK`, the type, owner and size judged on that
 descriptor rather than on the name, and only the bytes that were vouched for read back
-through it. Every file it writes goes through `bin/safe-write`: an `O_EXCL`,
-`O_NOFOLLOW`, mode 0600 temporary in the destination's own directory, fsync, rename,
-and an fsync of the directory.
+through it. Every config, profile store, backup and stamp it writes goes through
+`bin/safe-write`: an `O_EXCL`, `O_NOFOLLOW`, mode 0600 temporary in the destination's own
+directory, fsync, rename, and an fsync of the directory. The model cache is built the same
+way by hand: each piece is staged in a fresh `mktemp` file in the cache's own private
+folder and renamed into place. jq runs without `HOME`, so a `~/.jq` it would otherwise
+read first never reaches it.
 
 Nothing private goes on a command line. Every account on the machine can read a
 process's arguments through `/proc`, so a config's contents, a profile's name and id,
@@ -75,9 +78,14 @@ through a pipe, or in the environment, which only your own account can read; the
 arguments are fixed verbs, and the repair codes of the plugin's own vocabulary. `test/argv.test.sh` plants a different marker in each of
 those places and fails if any command the plugin starts carries one.
 
-Every process the panel starts is `/usr/bin/bash` on `bin/run-bounded`, which runs one of
+Every helper the panel starts is `/usr/bin/bash` on `bin/run-bounded`, which runs one of
 four helpers that ship beside it, under a deadline that ends the helper and everything it
 started, and with a cap on what it may print — the shell never holds more than the cap.
+A deadline a helper sets inside that one, around `opencode`, ends in a kill two seconds
+after its TERM, so nothing it starts outlives it either. The one other program the panel
+starts is the desktop notification: `/usr/bin/notify-send` under `/usr/bin/timeout`,
+with fixed words and a count, and the session bus and display added to the same cleared
+environment.
 The environment is cleared and rebuilt from a fixed `PATH` of the system's own folders,
 `HOME` and the XDG folders, so nothing like `LD_PRELOAD`, `BASH_ENV` or `PYTHONPATH`
 reaches a helper or anything it runs, and each one starts in your home folder. The
@@ -119,9 +127,10 @@ To take it off the bar, see [Removing it](#removing-it) — your config and prof
 
 ## Your first profile
 
-You already have one. The first time the panel opens it saves whatever you are running as
-**Current config**, so there is a copy of your setup before you change anything — and something to
-come back to. Nothing is written to your opencode config to do that; it is only read.
+You already have one. The first time the plugin loads, with no profiles saved yet, it saves
+whatever you are running as **Current config**, so there is a copy of your setup before you
+change anything — and something to come back to. Nothing is written to your opencode config to
+do that; it is only read.
 
 To add more, press **Add a profile**. It offers three ways in:
 
@@ -213,8 +222,9 @@ into the JSON, and the two merge.
 Eight ready-made profiles ship with the plugin. Each one matches models to what an agent actually
 does — the heavy thinking on a strong model, the file-scanning on a cheap fast one — so someone
 who has just connected a key does not have to pick every model by hand. Under oh-my-openagent a
-template fills eleven agents and eight categories; on plain opencode it sets the default model and
-two agents.
+template fills eleven agents and nine categories; on plain opencode it sets the default model and
+two agents. **oh-my-openagent recommended** follows its author's own line-up instead: ten agents,
+seven categories, and three opencode agents.
 
 | | |
 |---|---|
@@ -299,8 +309,12 @@ A switch changes which model each agent runs on, and nothing else. In `opencode.
 agent's and category's `model`, `models`, `variant`, `reasoning` and `fallback_models`. An agent's
 prompt, tools, permissions and every other setting stay as your file has them — whatever the
 profile was saved with — and so do agents the profile does not mention, which only lose a model the
-profile does not pin. Everything outside those keys comes back with the same keys, in the same
-order, with the same values: your providers, your MCP servers, your plugin list, your API keys.
+profile does not pin. That holds when your file has no `agent` block at all: a profile saved
+while it had one brings back the models it pinned there and nothing else. Everything outside
+those keys comes back with the same keys, in the same order, with the same values: your
+providers, your MCP servers, your plugin list, your API keys. A model that is not a
+`provider/model` id, or an effort that is not a word, stops the switch before anything is
+touched.
 
 The edit is a splice into the text rather than a re-serialisation, so comments, indentation and
 blank lines outside the edited keys survive it; a `.jsonc` is edited like any other file. Inside an
@@ -309,7 +323,11 @@ not come back. Each edit is read back before it is written, and a result that do
 exactly the document intended is refused rather than written.
 
 Before every switch it copies the files it is about to touch. **Restore the previous config** in the
-footer puts them back exactly as they were, and the undo is itself undoable.
+footer puts them back exactly as they were, and the undo is itself undoable. It only does that over
+exactly what the switch left: an undo puts a whole file back, so once the file has changed since —
+a permission tightened, an MCP server removed, a key rotated — putting the copy back would undo that
+too, and the undo is refused instead, with nothing changed. Switching to a profile still works then,
+because a switch changes only models; `oc-profiles revert --force` puts the copy back anyway.
 
 If you edit a config by hand afterwards, the panel notices and says so rather than carrying on
 claiming a profile that no longer describes anything:
@@ -338,16 +356,18 @@ The last two rows below are also true of configs that work, so on their own they
 
 | | |
 |---|---|
-| **An agent set to `models`** | in your config, or in a saved profile. Rewritten back into `model` plus `fallback_models`, which is what the schema does have. A *category* keeps its `models` — that one is a real field, and rewriting it would be changing a config that works. |
+| **An agent set to `models`** | in your config, or in a saved profile, on a 4.x oh-my-openagent. Rewritten back into `model` plus `fallback_models`, which is what that schema does have. 5.x declares `models` on an agent, so there it is not reported. A *category* keeps its `models` — that one is a real field, and rewriting it would be changing a config that works. |
 | **An agent set to a bare model string** | `"build": "provider/model"` becomes `"build": { "model": "provider/model" }`. opencode's `AgentConfig` has no string branch, so the short form is a config it refuses to load. |
 | **A file-level `fallback_models`** | under `[opencode]`, which `doctor` reports as `Unknown config key` against `Affects: plugin startup`. Deleted, with a splice, so the rest of the file is untouched. |
 | **A legacy `oh-my-openagent.json`** | left behind by the migration. Reported, never deleted: it may be the only copy of an old setup. |
-| **`variant` rather than `reasoning`** | both spellings load — nothing to fix. |
+| **`variant` rather than `reasoning`** | on 4.x, where `reasoning` is the newer spelling. Both load — nothing to fix. |
 | **This plugin can no longer read oh-my-openagent** | it declares its agents, its categories and its fields in files this plugin reads; when a release moves them, every probe answers nothing and the panel falls back to the roster it shipped with. That looks like a working panel missing whatever the last few releases added, so it is the one failure nobody would think to report. Named here instead. |
 
-Every repair copies the file first and undoes through the same **Restore the previous config**;
-a repair that does not land puts the file back itself. From a terminal it is the same two verbs
-the panel calls, and a dry run is the default:
+Every repair that rewrites a config copies the file first and undoes through the same **Restore the
+previous config**; a repair that does not land puts the file back itself. The one that rewrites a
+saved profile instead keeps a copy of the profile store in the backups folder, outside Undo's reach.
+A file you have turned off in the settings is still checked, but not repaired. From a terminal it is
+the same two verbs the panel calls, and a dry run is the default:
 
 ```bash
 oc-profiles doctor                                     # what is wrong, as JSON
@@ -447,7 +467,7 @@ Right-click the bar widget → Settings, or edit the entry in `~/.config/omarchy
 | `afterSwitch` | Notify | see [Reloading opencode](#reloading-opencode) |
 | `confirmSwitch` | off | ask before switching. Off is the fast path the bar is for |
 | `manageOpencodeJson` | on | manage `model`, `small_model` and each agent's model in `opencode.json` |
-| `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — plus a file-level `fallback_models` on the legacy `oh-my-openagent.json`, where that key still exists. Off forces the plain-opencode view |
+| `manageOhMyOpenAgent` | on | manage `agents` and `categories` in `~/.omo/omo.jsonc` — or in the legacy `oh-my-openagent.json`, plus its file-level `fallback_models`, on a machine where that is still the file in use. Off forces the plain-opencode view |
 | `keepBackups` | 10 | copies kept of each config file, oldest deleted past this. The one Undo needs is never pruned |
 | `catalogRefreshHours` | 24 | how often the models.dev catalogue is re-downloaded |
 | `showModelMeta` | on | show context window and price on every model row |
@@ -476,7 +496,7 @@ Everything the panel writes goes through one script, which you can run yourself:
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles capture X  # save the live config
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles seed       # first profile, if there are none
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles apply X    # switch
-~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles revert     # undo the last switch
+~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles revert     # undo the last switch, if nothing changed since
 ~/.config/omarchy/plugins/oliwier.opencode-configs/bin/oc-profiles reload     # re-read config in place
 ```
 
@@ -509,7 +529,7 @@ rm -rf ~/.cache/omarchy/oliwier.opencode-configs      # the cached model list
 |---|---|
 | `~/.local/state/omarchy/opencode-configs/profiles.json` | your profiles, favourites and recents |
 | `~/.local/state/omarchy/opencode-configs/backups/` | one folder per switch, with a copy of each file |
-| `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt on panel open when stale |
+| `$XDG_CACHE_HOME/omarchy/oliwier.opencode-configs/models.json` | the model list, rebuilt in the background when stale |
 
 Both folders, and every folder below them, are 0700, and every file the plugin writes
 there is 0600 — a backup is a full copy of your config, keys and tokens included. A
