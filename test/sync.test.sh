@@ -279,6 +279,89 @@ echo "=== an answer over the output cap is never installed ==="
 is "it is refused"                   "$(MAX_OUT_BYTES=1024 FORCE=1 run)" "stale"
 is "and the list on disk is untouched" "$(cmp -s "$T/models.before" "$C/models.json" && echo same)" "same"
 
+echo "=== the entity tag on file is read like any other file ==="
+# curl reads the file it is handed with fopen() and sends what it finds as a header.
+# Handed the name, a link there sends any file this user can read to models.dev.
+cat > "$T/bin/curl" <<EOF
+#!/usr/bin/env bash
+out=""; prev=""; sent=""
+for a in "\$@"; do
+  [ "\$prev" = "-o" ] && out="\$a"
+  [ "\$prev" = "--etag-compare" ] && sent="\$(cat "\$a" 2>/dev/null)"
+  prev="\$a"
+done
+printf '%s\n' "\$*" >> "$T/curl.args"
+printf '%s\n' "\$sent" >> "$T/curl.sent"
+[ -n "\$out" ] && cp "$T/api.json" "\$out"
+printf '200'
+EOF
+chmod +x "$T/bin/curl"
+printf 'SECRET-TOKEN\n' > "$T/secret"
+rm -f "$C/models.dev.etag"; ln -s "$T/secret" "$C/models.dev.etag"
+FORCE=1 run >/dev/null
+is "a link there sends nothing"      "$(grep -c SECRET "$T/curl.sent" 2>/dev/null || true)" "0"
+rm -f "$C/models.dev.etag"; mkfifo "$C/models.dev.etag"
+is "a FIFO there stalls nothing"     "$(FORCE=1 timeout 20 "$REPO/bin/sync-models.sh" 2>/dev/null)" "fresh"
+rm -f "$C/models.dev.etag"; printf '"abc123"\n' > "$C/models.dev.etag"
+: > "$T/curl.sent"; FORCE=1 run >/dev/null
+is "a real tag is still sent"        "$(cat "$T/curl.sent")" '"abc123"'
+is "and the retries are bounded"     "$(grep -c -- '--retry-max-time' "$T/curl.args")" "$(wc -l < "$T/curl.args" | tr -d ' ')"
+
+echo "=== jq runs without HOME, so a planted ~/.jq is never read ==="
+H="$T/home"; mkdir -p "$H"; mkfifo "$H/.jq"
+is "a FIFO at ~/.jq stalls nothing"  "$(HOME="$H" FORCE=1 timeout 20 "$REPO/bin/sync-models.sh" 2>/dev/null)" "fresh"
+rm -f "$H/.jq"; printf 'def utf8bytelength: 0;\n' > "$H/.jq"
+python3 - "$T/api.json" <<'PY'
+import json, sys
+json.dump({"k" * 4096: {"models": {"m": {"tool_call": True, "modalities": {"output": ["text"]}}}},
+           "zen": {"models": {"good": {"tool_call": True, "modalities": {"output": ["text"]}}}}},
+          open(sys.argv[1], "w"))
+PY
+HOME="$H" FORCE=1 run >/dev/null
+is "nor does one redefine a bound"   "$(jq -r '[.models[]|select(.provider|length > 64)]|length' "$C/models.json")" "0"
+
+echo "=== opencode is handed a catalogue rather than left to fetch one ==="
+cat > "$T/bin/opencode" <<EOF
+#!/usr/bin/env bash
+echo call >> "$T/oc.calls"
+printf '%s|%s\n' "\${OPENCODE_DISABLE_MODELS_FETCH:-}" "\$( [ -f "\${OPENCODE_MODELS_PATH:-/nonexistent}" ] && echo file )" > "$T/oc.env"
+printf 'zen/good\n'
+EOF
+chmod +x "$T/bin/opencode"
+age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null
+is "with its fetch turned off, and a file to read" "$(cat "$T/oc.env")" "1|file"
+
+echo "=== a long run of blanks in a model key costs nothing ==="
+# sed's trailing-blank trim costs the square of a run of blanks: 40 KB took 49 s.
+python3 - "$T/bin/opencode" "$T" <<'PY'
+import sys
+open(sys.argv[1], "w").write("#!/usr/bin/env bash\nprintf 'zen/good\\nzen/" + " " * 40000 + "x \\n'\n")
+PY
+chmod +x "$T/bin/opencode"
+age "$C/reachable.stamp" "20 minutes ago"
+is "the run finishes"                "$(timeout 20 env TTL=86400 REACH_TTL=900 "$REPO/bin/sync-models.sh" 2>/dev/null)" "reach"
+is "and the line is left out"        "$(cat "$C/reachable.txt")" "zen/good"
+
+echo "=== a list the deadline ended is not installed, even cut between lines ==="
+cp "$C/reachable.txt" "$T/reach.before"
+cat > "$T/bin/opencode" <<EOF
+#!/usr/bin/env bash
+printf 'zen/first-half-only\n'
+exit 124
+EOF
+chmod +x "$T/bin/opencode"
+age "$C/reachable.stamp" "20 minutes ago"; run >/dev/null
+is "the old list stays"              "$(cmp -s "$T/reach.before" "$C/reachable.txt" && echo same)" "same"
+
+echo "=== a catalogue file holding many values is joined once ==="
+python3 - "$T/api.json" <<'PY'
+import json, sys
+first = json.dumps({"zen": {"models": {"good": {"tool_call": True, "modalities": {"output": ["text"]}}}}})
+open(sys.argv[1], "w").write(first + "{}" * 5000)
+PY
+FORCE=1 run >/dev/null
+is "one list comes out"              "$(jq -s length "$C/models.json")" "1"
+
 printf '\n%d passed' "$pass"
 [ "$fail" -gt 0 ] && printf ', %d FAILED' "$fail"
 printf '\n'

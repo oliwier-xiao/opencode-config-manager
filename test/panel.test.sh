@@ -210,9 +210,9 @@ plant "a file the shell reads itself" Panel.qml \
 plant "a program found on PATH" Panel.qml \
   's.replace("[\"/usr/bin/timeout\", \"-k\"", "[\"timeout\", \"-k\"", 1)' "absolute path"
 plant "a detached program with the shell's environment" Panel.qml \
-  's.replace("      clearEnvironment: true,\n      environment: root.desktopEnv(),", "      environment: root.desktopEnv(),", 1)' "execDetached without clearEnvironment"
+  's.replace("  function plain(s) {", "  function launchIt() {\n    Quickshell.execDetached({\n      command: [\"/usr/bin/true\"],\n      environment: root.desktopEnv()\n    })\n  }\n  function plain(s) {", 1)' "execDetached without clearEnvironment"
 plant "a URL opened by Qt" Panel.qml \
-  's.replace("  function openConfigFile(path) {", "  function openConfigFile(path) {\n    Qt.openUrlExternally(path)", 1)' "openUrlExternally"
+  's.replace("  function plain(s) {", "  function plain(s) {\n    Qt.openUrlExternally(s)", 1)' "openUrlExternally"
 plant "a label left to guess" EffortDropdown.qml \
   's.replace("        text: \"󰅀\"\n        textFormat: Text.PlainText\n", "        text: \"󰅀\"\n", 1)' "Text without textFormat"
 plant "a label told to render markup" EffortDropdown.qml \

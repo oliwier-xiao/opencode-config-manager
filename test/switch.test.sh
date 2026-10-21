@@ -82,13 +82,88 @@ is "the same profile writes the same file every time" "$(live "$D" '.')" "$first
 
 echo "=== undo puts back the bytes ==="
 # Each switch backed up what it replaced, so the oldest backup holds the file as it
-# was before any of them. (A plain revert undoes only the last switch, and is itself
-# undoable, so a second one toggles back.)
+# was before any of them. The file has moved on since that backup was taken, so a
+# plain revert to it is refused; --force is the terminal's way to go back anyway.
 first_ts="$(run "$D" backups | jq -r 'last | .ts')"
-is "going back to the first backup is made" "$(run "$D" revert "$first_ts" | jq -r .ok)" "true"
+is "going back past later switches is refused" "$(run "$D" revert "$first_ts" | jq -r .code)" "E_DRIFT"
+is "unless it is forced"                       "$(run "$D" revert --force "$first_ts" | jq -r .ok)" "true"
 cmp -s "$D/cfg/opencode.json" "$D/original.json" \
   && ok "and gives back the original file, byte for byte" \
   || no "and gives back the original file, byte for byte" "$(diff "$D/original.json" "$D/cfg/opencode.json" | head -5 | tr '\n' ' ')"
+
+echo "=== undo straight after a switch puts it back, and is undoable itself ==="
+D=$(mk undo)
+printf '%s\n' "$LIVE" > "$D/cfg/opencode.json"
+cp "$D/cfg/opencode.json" "$D/original.json"
+printf '%s' "$PROFILE" | run "$D" save >/dev/null
+run "$D" apply p1 >/dev/null
+cp "$D/cfg/opencode.json" "$D/switched.json"
+is "undo is made" "$(run "$D" revert | jq -r .ok)" "true"
+cmp -s "$D/cfg/opencode.json" "$D/original.json" && ok "the file is as it was" || no "the file is as it was" "it is not"
+is "undoing the undo is made" "$(run "$D" revert | jq -r .ok)" "true"
+cmp -s "$D/cfg/opencode.json" "$D/switched.json" && ok "and the switch is back" || no "and the switch is back" "it is not"
+
+echo "=== undo does not put a whole file back over edits made since the switch ==="
+# Undo restores the whole file. Over a permission tightened after the switch, that
+# would quietly loosen it again, along with any MCP server or key removed since.
+run "$D" apply p1 >/dev/null 2>&1
+"$REPO/bin/jsonc-edit" read "$D/cfg/opencode.json" | jq '.permission = {"bash":"ask"}' > "$D/edited.json"
+cp "$D/edited.json" "$D/cfg/opencode.json"
+before_n="$(ls -1d "$D/state/omarchy/opencode-configs/backups"/*/ | wc -l)"
+is "undo is refused"              "$(run "$D" revert | jq -r .code)" "E_DRIFT"
+cmp -s "$D/cfg/opencode.json" "$D/edited.json" && ok "the edit stays" || no "the edit stays" "it was undone"
+is "and no backup is left behind" "$(ls -1d "$D/state/omarchy/opencode-configs/backups"/*/ | wc -l)" "$before_n"
+rm -f "$D/cfg/opencode.json"
+is "a deleted config is not brought back either" "$(run "$D" revert | jq -r .code)" "E_DRIFT"
+[ ! -e "$D/cfg/opencode.json" ] && ok "and it stays deleted" || no "and it stays deleted" "it was recreated"
+
+echo "=== a backup an earlier version took, with no record of what it wrote, is not put back blind ==="
+D=$(mk older)
+printf '%s\n' "$LIVE" > "$D/cfg/opencode.json"
+printf '%s' "$PROFILE" | run "$D" save >/dev/null
+run "$D" apply p1 >/dev/null
+M="$(ls -1d "$D/state/omarchy/opencode-configs/by-config"/*/backups/*/ | tail -1)meta.json"
+jq '.files |= map(del(.written))' "$M" > "$D/meta" && cp "$D/meta" "$M"
+cp "$D/cfg/opencode.json" "$D/switched.json"
+is "it is refused"              "$(run "$D" revert | jq -r .code)" "E_DRIFT"
+is "and says why"               "$(run "$D" revert | jq -r '.message | test("earlier version")')" "true"
+cmp -s "$D/cfg/opencode.json" "$D/switched.json" && ok "and the file is untouched" || no "and the file is untouched" "it was written"
+
+echo "=== a switch that would write nothing is refused ==="
+D=$(mk nothing)
+printf '%s\n' "$LIVE" > "$D/cfg/opencode.json"
+printf '%s' "$PROFILE" | run "$D" save >/dev/null
+is "the refusal names it"   "$(OC_MANAGE_OPENCODE=0 run "$D" apply p1 | jq -r .code)" "E_NOTHING_TO_APPLY"
+is "no profile became active" "$(run "$D" list | jq -r '.state.activeProfileId')" "null"
+is "and Undo points nowhere new" "$(run "$D" list | jq -r '.state.lastBackup')" "null"
+
+echo "=== a model or effort that is not one stops the switch ==="
+D=$(mk gate)
+printf '%s\n' "$LIVE" > "$D/cfg/opencode.json"
+cp "$D/cfg/opencode.json" "$D/before.json"
+printf '%s' '{"id":"s","name":"S","targets":[{"file":"opencode","shape":"opencode","manages":["model","small_model","agent"],
+  "payload":{"model":"openai/gpt-5","small_model":"gpt-5-mini"}}]}' | run "$D" save >/dev/null
+printf '%s' '{"id":"v","name":"V","targets":[{"file":"opencode","shape":"opencode","manages":["model","small_model","agent"],
+  "payload":{"agent":{"build":{"model":"openai/gpt-5","variant":{"effort":"max"}}}}}]}' | run "$D" save >/dev/null
+printf '%s' '{"id":"o","name":"O","targets":[{"file":"opencode","shape":"opencode","manages":["model","small_model","agent"],
+  "payload":{"model":{"provider":"openai"}}}]}' | run "$D" save >/dev/null
+is "a small model without a provider" "$(run "$D" apply s | jq -r .code)" "E_MODEL_SYNTAX"
+is "an effort that is not a string"   "$(run "$D" apply v | jq -r .code)" "E_MODEL_SYNTAX"
+is "a model that is not a string"     "$(run "$D" apply o | jq -r .code)" "E_MODEL_SYNTAX"
+cmp -s "$D/cfg/opencode.json" "$D/before.json" && ok "and the file is untouched" || no "and the file is untouched" "it was written"
+
+echo "=== a switch the store cannot record is put back ==="
+D=$(mk store)
+printf '%s\n' "$LIVE" > "$D/cfg/opencode.json"
+cp "$D/cfg/opencode.json" "$D/before.json"
+printf '%s' "$PROFILE" | run "$D" save >/dev/null
+S="$(dirname "$(find "$D/state" -name profiles.json | head -1)")"
+chmod 500 "$S"
+out="$(run "$D" apply p1)"; rc=$?
+chmod 700 "$S"
+is "it says so"                     "$(jq -r .code <<<"$out")" "E_STORE"
+is "as a write that was put back"   "$rc" "3"
+cmp -s "$D/cfg/opencode.json" "$D/before.json" && ok "and the config is as it was" || no "and the config is as it was" "the switch stayed"
 
 echo "=== a config that will not read stops the switch ==="
 D=$(mk unread)
@@ -99,6 +174,26 @@ cp "$D/cfg/opencode.json" "$D/broken.json"
 run "$D" apply p1 >/dev/null 2>&1
 cmp -s "$D/cfg/opencode.json" "$D/broken.json" \
   && ok "the broken file is left exactly as it was" || no "the broken file is left exactly as it was" "it was written"
+
+echo "=== a profile saved with an agent map brings back only models once the map is gone ==="
+# Captured while build was allowed every shell command. The agent map was then dropped
+# for a global "ask"; switching back must not bring the old allowance with it.
+D=$(mk nomap)
+printf '%s\n' '{"model":"anthropic/claude-sonnet-5","agent":{"build":{"model":"openai/gpt-5","prompt":"OLD PROMPT","permission":{"bash":"allow"}}}}' > "$D/cfg/opencode.json"
+run "$D" capture Old old >/dev/null
+is "the capture holds the old allowance" \
+   "$(run "$D" list | jq -c '.profiles[] | select(.id=="old") | .targets[0].payload.agent.build.permission')" '{"bash":"allow"}'
+printf '%s\n' '{"model":"anthropic/claude-sonnet-5","permission":{"bash":"ask"}}' > "$D/cfg/opencode.json"
+is "the switch is made"                    "$(run "$D" apply old | jq -r .ok)" "true"
+is "build gets its model and nothing else" "$(live "$D" '.agent')" '{"build":{"model":"openai/gpt-5"}}'
+is "the global policy is still ask"        "$(live "$D" '.permission')" '{"bash":"ask"}'
+
+echo "=== an agent map that is not an object is refused, not written over ==="
+printf '%s\n' '{"model":"anthropic/claude-sonnet-5","agent":["build"]}' > "$D/cfg/opencode.json"
+cp "$D/cfg/opencode.json" "$D/listmap.json"
+is "the switch is refused" "$(run "$D" apply old 2>/dev/null | jq -r .code)" "E_AGENT_SHAPE"
+cmp -s "$D/cfg/opencode.json" "$D/listmap.json" \
+  && ok "and the file is left exactly as it was" || no "and the file is left exactly as it was" "it was written"
 
 echo "=== updating a profile keeps what the capture does not cover ==="
 D=$(mk update)

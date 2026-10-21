@@ -2,8 +2,9 @@ import QtQuick
 import Quickshell
 import Quickshell.Io
 
-// One run of one of this plugin's helpers. Every process the panel starts is one of
-// these, so what is asked of each of them is written down once, here:
+// One run of one of this plugin's helpers. Every helper the panel starts is one of
+// these — the one other program it starts is the notification in Panel.qml, which
+// prints nothing back — so what is asked of each of them is written down once, here:
 //
 //   the program      /usr/bin/bash on bin/run-bounded, which runs the helper in bin/
 //                    named by `helper` — a fixed name, never a path — under a

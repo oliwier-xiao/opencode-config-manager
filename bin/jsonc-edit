@@ -268,12 +268,16 @@ def delete_member(text, node, key):
     j = max(i for i, m in enumerate(members) if m["key"] == key)
     m = members[j]
     start, end = m["start"], m["value"]["end"]
+    # The last member, with no comma of its own: the separator to take is the one in
+    # front of it, which leaves the member before it last. Only that one character
+    # goes. Cutting from it to the member took everything in between as well — a
+    # comment trailing the member before, a line commented out — none of it the
+    # deleted member's, and none of it in the parsed document a read-back compares.
+    prev_comma = None
     if m["comma"] is not None:
         end = m["comma"] + 1
     elif j > 0:
-        # The last member, with no comma of its own: the separator to take is the
-        # one in front of it, which leaves the member before it last.
-        start = members[j - 1]["comma"]
+        prev_comma = members[j - 1]["comma"]
     # A comment trailing the member on its own line goes with it.
     le = _rest_of_line(text, end)
     if le is not None:
@@ -284,7 +288,10 @@ def delete_member(text, node, key):
         start = ls
         if end < len(text):
             end += 1
-    return text[:start] + text[end:]
+    text = text[:start] + text[end:]
+    if prev_comma is not None:
+        text = text[:prev_comma] + text[prev_comma + 1:]
+    return text
 
 
 def replace_member(text, node, key, value, unit):

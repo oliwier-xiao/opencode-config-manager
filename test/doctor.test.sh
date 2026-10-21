@@ -30,6 +30,19 @@ run(){ local d="$1"; shift
   OPENCODE_CONFIG_DIR="$d/cfg" OMO_CONFIG_HOME="$d/omo" \
   XDG_CACHE_HOME="$d/cache" XDG_STATE_HOME="$d/state" OC_AUTO_RELOAD=0 "$OC" "$@"; }
 codes(){ jq -r '[.issues[].code]|sort|join(",")'; }
+# A stand-in oh-my-openagent of a given version whose schema declares the given agent
+# fields: what doctor reports depends on the installed release, not on this machine's.
+fake_omo(){ local d="$1" v="$2" fields="$3"
+  local p="$d/cache/opencode/packages/oh-my-openagent@$v/node_modules/oh-my-openagent"
+  mkdir -p "$p/dist"
+  jq -cn --arg v "$v" '{name:"oh-my-openagent", version:$v, exports:{"./schema.json":"./dist/schema.json"}}' > "$p/package.json"
+  jq -cn --argjson f "$fields" '($f | map({key:., value:{}}) | from_entries) as $p
+    | {properties:{agents:{properties:{sisyphus:{properties:$p}}},
+                   categories:{additionalProperties:{properties:{model:{}, models:{}, variant:{}}}}}}' > "$p/dist/schema.json"
+  mkdir -p "$p/dist/config/schema"
+  printf 'export declare const BuiltinCategoryNameSchema: z.ZodEnum<{\n    quick: "quick";\n}>;\n' \
+    > "$p/dist/config/schema/categories.d.ts"
+}
 
 echo "=== a healthy config finds nothing ==="
 D=$(mk clean no)
@@ -104,9 +117,9 @@ is "manages lost the file-level key" \
    "$(run "$D" list | jq -r '[.profiles[]|select(.id=="muse")][0].targets[0].manages|join(",")')" "agents,categories"
 is "doctor is clean after"   "$(run "$D" doctor | jq -r '[.issues[]|select(.code=="E_MODELS_IN_PROFILE")]|length')" "0"
 
-echo "=== the same shape on the live config ==="
-if skip_omo "live models repair"; then :; else
-D=$(mk live yes)
+echo "=== the same shape on the live config, under a 4.x that drops it ==="
+D=$(mk live no)
+fake_omo "$D" 4.19.3 '["model","variant","reasoning","fallback_models","prompt"]'
 printf '{"$schema":"https://opencode.ai/config.json","plugin":["oh-my-openagent@latest"]}' > "$D/cfg/opencode.json"
 cat > "$D/omo/omo.jsonc" <<'J'
 {
@@ -144,7 +157,32 @@ is "doctor is clean after"  "$(run "$D" doctor | jq -r '[.issues[]|select(.code=
 echo "--- undo puts it back ---"
 run "$D" revert >/dev/null
 is "revert restores models" "$(J '.agents.sisyphus.models|length')" "2"
-fi
+
+echo "=== under a 5.x that declares models on an agent, the same config is healthy ==="
+D=$(mk five no)
+fake_omo "$D" 5.1.38 '["model","models","variant","reasoning","fallback_models","prompt"]'
+printf '{"$schema":"https://opencode.ai/config.json","plugin":["oh-my-openagent@latest"]}' > "$D/cfg/opencode.json"
+printf '%s\n' '{"[opencode]":{"agents":{"sisyphus":{"models":["opencode/muse-spark-1.3-contributor-free","anthropic/claude-opus-5"]},
+  "oracle":{"model":"anthropic/claude-opus-5","variant":"high"}}}}' > "$D/omo/omo.jsonc"
+OC_PROFILE_JSON='{"id":"muse","name":"Muse","targets":[{"file":"ohmy","shape":"oh-my-openagent","manages":["agents","categories"],
+  "payload":{"agents":{"sisyphus":{"models":["anthropic/claude-opus-5"]}}}}]}' run "$D" save >/dev/null
+is "nothing is reported"         "$(run "$D" doctor | codes)" ""
+BEFORE=$(sha256sum "$D/omo/omo.jsonc" | cut -d' ' -f1)
+is "and there is nothing to fix" "$(run "$D" repair --fix E_MODELS_IN_CONFIG --apply | jq -r .code)" "E_NOT_FIXABLE"
+is "in a profile either"         "$(run "$D" repair --fix E_MODELS_IN_PROFILE --profile muse --apply | jq -r .code)" "E_NOT_FIXABLE"
+is "the config is untouched"     "$(sha256sum "$D/omo/omo.jsonc" | cut -d' ' -f1)" "$BEFORE"
+
+echo "=== a file the settings leave alone is reported, not repaired ==="
+D=$(mk unmanaged no)
+cat > "$D/cfg/opencode.json" <<'J'
+{"agent":{"build":"opencode/muse-spark-1.3-contributor-free"}}
+J
+BEFORE=$(sha256sum "$D/cfg/opencode.json" | cut -d' ' -f1)
+R=$(OC_MANAGE_OPENCODE=0 run "$D" doctor)
+is "still found"           "$(codes <<<"$R")" "E_BARE_AGENT_STRING"
+is "but offers no fix"     "$(jq -r '.issues[0].fix' <<<"$R")" ""
+is "and refuses one"       "$(OC_MANAGE_OPENCODE=0 run "$D" repair --fix E_BARE_AGENT_STRING --apply | jq -r .code)" "E_NOT_MANAGED"
+is "the file is untouched" "$(sha256sum "$D/cfg/opencode.json" | cut -d' ' -f1)" "$BEFORE"
 
 echo "=== a file-level fallback_models under [opencode] ==="
 if skip_omo "file-level fallback_models"; then :; else

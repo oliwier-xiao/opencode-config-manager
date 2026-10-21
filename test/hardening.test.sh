@@ -92,7 +92,7 @@ s = pathlib.Path(sys.argv[1]).read_text()
 out = []
 for line in s.split("\n"):
     out.append(line)
-    if 'wrote+=("$logical"); OC_ROLLBACK_WROTE+=("$logical")' in line:
+    if 'OC_ROLLBACK_WROTE+=("$logical"); OC_ROLLBACK_PATH[$logical]="$file"' in line:
         out.append("    sleep 4")
 pathlib.Path(sys.argv[2]).write_text("\n".join(out))
 PYEOF
@@ -156,6 +156,50 @@ is "nothing staged survives"    "$(find "$D/cache" -name '.stage.*' 2>/dev/null 
 # the check is here to search. It could not have failed.
 LEFT=$(grep -rl "$KILL_CANARY" "$D/cache" "${TMPDIR:-/tmp}" 2>/dev/null | grep -v "/cfg/" | wc -l)
 is "and no provider key with it" "$LEFT" "0"
+
+echo "=== a write ended by a signal leaves no copy of the config behind ==="
+SW="$ROOT/sw"; mkdir -p "$SW"; printf 'old\n' > "$SW/cfg.json"
+head -c 67108864 /dev/zero > "$ROOT/big"
+res="$(python3 - "$SW" "$REPO/bin/safe-write" "$ROOT/big" <<'PY'
+import os, signal, subprocess, sys, time
+d, sw, data = sys.argv[1], sys.argv[2], sys.argv[3]
+for _ in range(5):
+    with open(data, "rb") as fh:
+        p = subprocess.Popen([sw, os.path.join(d, "cfg.json")], stdin=fh)
+        hit = False
+        for _ in range(20000):
+            if any(n.startswith(".cfg.json.") for n in os.listdir(d)):
+                p.send_signal(signal.SIGTERM); hit = True; break
+            time.sleep(0.0002)
+        p.wait()
+    if hit:
+        left = [n for n in os.listdir(d) if n.startswith(".cfg.json.")]
+        print("leftover" if left else "clean"); break
+else:
+    print("missed")
+PY
+)"
+rm -f "$ROOT/big"
+case "$res" in
+  missed) printf '  skip the signal never landed while the temporary existed\n' ;;
+  *) is "the temporary is removed on the way out" "$res" "clean"
+     is "and the config is untouched" "$(cat "$SW/cfg.json")" "old" ;;
+esac
+
+echo "=== a planted ~/.jq is never read ==="
+# jq sources $HOME/.jq before every program. A FIFO there held every command until
+# the timebox ended it; a definition there could redefine the checks a switch makes.
+D=$(mk dotjq)
+H="$ROOT/dotjq-home"; mkdir -p "$H"; mkfifo "$H/.jq"
+out="$(HOME="$H" timeout 20 env OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" \
+        XDG_CACHE_HOME="$D/cache" XDG_STATE_HOME="$D/state" OC_AUTO_RELOAD=0 "$OC" list 2>/dev/null)"
+is "a FIFO there stalls nothing" "$(jq -r '.profiles | type' <<<"$out" 2>/dev/null)" "array"
+rm -f "$H/.jq"; printf 'def test($re): true;\n' > "$H/.jq"
+printf '%s' '{"id":"t","name":"T","targets":[{"file":"opencode","shape":"opencode","manages":["model"],"payload":{"model":"not a model"}}]}' \
+  | run "$D" save >/dev/null
+out="$(HOME="$H" env OPENCODE_CONFIG_DIR="$D/cfg" OMO_CONFIG_HOME="$D/omo" XDG_CACHE_HOME="$D/cache" \
+        XDG_STATE_HOME="$D/state" OC_AUTO_RELOAD=0 "$OC" apply t 2>/dev/null)"
+is "nor does a definition there loosen a check" "$(jq -r .code <<<"$out")" "E_MODEL_SYNTAX"
 
 echo "=== a missing helper says so plainly ==="
 BARE="$ROOT/bare"; mkdir -p "$BARE"; cp "$OC" "$BARE/oc-profiles"; chmod +x "$BARE/oc-profiles"

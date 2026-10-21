@@ -37,8 +37,11 @@ lacks(){ printf '%s' "$2" | jq -e --arg k "$3" 'index($k) == null' >/dev/null 2>
 # failure names the probe that broke instead of the command that used it.
 probe(){ bash -c '
   set -uo pipefail
-  eval "$(sed -n "/^mktemp_tracked()/,/^}/p;/^read_capped()/,/^}/p;/^omo_package_dir()/,/^}/p;/^omo_schema_file()/,/^}/p;/^omo_fields_json()/,/^}/p;/^omo_dts_enum()/,/^}/p;/^omo_category_names()/,/^}/p;/^ohmy_forbidden_for()/,/^}/p" "$1/bin/oc-profiles")"
-  SELF_DIR="$1/bin"; MAX_PACKAGE_BYTES=67108864; MAX_CONFIG_BYTES=4194304
+  eval "$(sed -n "/^mktemp_tracked()/,/^}/p;/^read_capped()/,/^}/p;/^omo_version_at()/,/^}/p;/^omo_package_dir()/,/^}/p;/^omo_schema_file()/,/^}/p;/^omo_fields_json()/,/^}/p;/^omo_dts_enum()/,/^}/p;/^omo_category_names()/,/^}/p;/^ohmy_forbidden_for()/,/^}/p" "$1/bin/oc-profiles")"
+  # The ceilings and the name filter the probes read, taken from the script itself so
+  # the two cannot drift apart.
+  eval "$(grep -E "^(MAX_PACKAGE_BYTES|MAX_CONFIG_BYTES|MAX_MANIFEST_BYTES|MAX_SCHEMA_BYTES|ROSTER_NAMES)=" "$1/bin/oc-profiles")"
+  SELF_DIR="$1/bin"
   CACHE_HOME="${CACHE_HOME_OVERRIDE:-${XDG_CACHE_HOME:-$HOME/.cache}}"
   # read_capped stages through mktemp_tracked, which writes into the run cache under
   # the prefix the script fixes at its top level, where its traps can see it.
