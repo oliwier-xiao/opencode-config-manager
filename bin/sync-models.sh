@@ -81,6 +81,12 @@ stage() { mktemp "${STAGE_PREFIX}XXXXXXXX" 2>/dev/null; }
 # open and then wait on for good. The staged files above are renamed with `mv -T`
 # for the same reason: a folder at the name is refused rather than moved into.
 stamp_now() { date +%s | "$SELF_DIR/safe-write" "$1" 2>/dev/null || true; }
+# An entity tag and nothing else: one line, a quoted run of visible characters,
+# weak or not. Whatever is on file is sent back to models.dev as a header, and
+# whatever models.dev sends is kept to be sent again.
+etag_ok() {
+  [ "$(wc -l < "$1")" -le 1 ] && LC_ALL=C grep -qxE '(W/)?"[!#-~]{0,256}"' "$1"
+}
 
 command -v jq >/dev/null 2>&1 || { echo offline; exit 1; }
 
@@ -123,13 +129,16 @@ if [ "$RAW_FRESH" = 0 ] && [ "$CAT_TRIED_RECENTLY" = 0 ]; then
 status=offline
 stamp_now "$CAT_ATTEMPT"
 
-# opencode keeps a byte-identical mirror of models.dev; using it when newer costs no request.
+# opencode keeps its own copy of the same catalogue, and a newer one is taken as it
+# is: if the download below fails, the list is still built from it. Its entity tag
+# is not the one on file, so the one on file goes — kept, a 304 would vouch for a
+# copy it never described.
 if [ -s "$OC_CACHE" ] && { [ ! -s "$RAW" ] || [ "$OC_CACHE" -nt "$RAW" ]; }; then
   # opencode's cache is a file at a predictable path like any other: read through
   # the descriptor, bounded, rather than copied by name.
   if t="$(stage)" && "$SELF_DIR/safe-read" "$OC_CACHE" --max-bytes "$MAX_FETCH_BYTES" \
        --no-empty --label "opencode's model cache" > "$t" 2>/dev/null; then
-    mv -fT "$t" "$RAW" && status=local
+    mv -fT "$t" "$RAW" && status=local && rm -f "$ETAG"
   fi
 fi
 
@@ -146,12 +155,24 @@ if command -v curl >/dev/null 2>&1; then
   # would be told 304 for content that was never kept. It moves into place only
   # once the body it belongs to has been accepted.
   etag_new="$(stage)" || etag_new="$fetched.etag"
+  # The tag on file goes to curl as a staged copy, never by its name: curl opens what
+  # it is given with fopen(), so it follows a link, waits on a FIFO, and sends what
+  # it finds as a request header — a link planted at this predictable name would send
+  # the first line of any file this user can read to models.dev. Read like every
+  # other file here, and passed on only if it is an entity tag.
+  etag_args=()
+  if et="$(stage)" && "$SELF_DIR/safe-read" "$ETAG" --max-bytes 512 --no-empty \
+       --label "the catalogue's entity tag" > "$et" 2>/dev/null && etag_ok "$et"; then
+    etag_args=(--etag-compare "$et")
+  fi
   if [ -n "$fetched" ]; then
     # -q first: no ~/.curlrc. A line in it could add a proxy, a header or an output
     # file to a request this script means to be exactly what it says.
-    code=$(curl -q -fsS --proto '=https' --max-time 20 --max-filesize "$MAX_FETCH_BYTES" \
-            --retry 2 --retry-delay 1 \
-            --etag-compare "$ETAG" --etag-save "$etag_new" \
+    # --retry-max-time: a 429 or 503 names its own wait in Retry-After, and curl
+    # sleeps it out between attempts, outside --max-time.
+    code=$(curl -q -fsS --proto '=https' --connect-timeout 10 --max-time 20 \
+            --max-filesize "$MAX_FETCH_BYTES" --retry 2 --retry-delay 1 --retry-max-time 30 \
+            "${etag_args[@]}" --etag-save "$etag_new" \
             -o "$fetched" -w '%{http_code}' https://models.dev/api.json 2>/dev/null) || code=000
     case "$code" in
       200) if checked="$(stage)" \
@@ -214,9 +235,25 @@ if [ -n "$OPENCODE_BIN" ]; then
     # folder this was started in is nobody's choice of project, and opencode reads the
     # project config of the folder it starts in.
     timeout_bin="$(type -P timeout 2>/dev/null)" || timeout_bin=timeout
+    # opencode is told not to download a catalogue of its own and handed one to read:
+    # its own cache, or this plugin's, copied the way every file here is read. Left to
+    # itself, `opencode models` fetched the catalogue — whole, decompressed, with no
+    # size limit — and read its cache by name, at a path anything can put a FIFO at.
+    oc_models="$(stage)" || oc_models=/dev/null
+    if [ "$oc_models" != /dev/null ]; then
+      "$SELF_DIR/safe-read" "$OC_CACHE" --max-bytes "$MAX_FETCH_BYTES" --no-empty \
+          --label "opencode's model cache" > "$oc_models" 2>/dev/null \
+        || "$SELF_DIR/safe-read" "$RAW" --max-bytes "$MAX_FETCH_BYTES" --no-empty \
+             --label "the model catalogue" > "$oc_models" 2>/dev/null \
+        || : > "$oc_models"
+    fi
+    # -k 2: this timeout puts opencode in a process group of its own, out of reach of
+    # the deadline the panel set, and TERM alone does not end a program that handles it.
     ( cd "$HOME" 2>/dev/null || cd /
-      PATH="${OPENCODE_BIN%/*}:/usr/bin:/bin" as_caller "$timeout_bin" 30 "$OPENCODE_BIN" models ) \
+      PATH="${OPENCODE_BIN%/*}:/usr/bin:/bin" OPENCODE_DISABLE_MODELS_FETCH=1 OPENCODE_MODELS_PATH="$oc_models" \
+        as_caller "$timeout_bin" -k 2 30 "$OPENCODE_BIN" models ) \
       2>/dev/null | head -c "$MAX_REACH_BYTES" > "$printed"
+    probe_rc="${PIPESTATUS[0]}"
     # Judged on what it printed, never on how it exited. opencode returns non-zero
     # when any single configured provider has no credentials — the exact state of
     # someone half-way through adding one — and under `pipefail` that verdict would
@@ -226,10 +263,18 @@ if [ -n "$OPENCODE_BIN" ]; then
     # mid-line, and half of an id matches the id pattern exactly as well as all of
     # one: it would reach the picker as a model, and the config as a model that does
     # not exist. Command substitution eats trailing newlines, so an empty result here
-    # is the proof that the last line was finished.
+    # is the proof that the last line was finished. And a printing the deadline or
+    # the byte cap ended is not a whole one even when the cut fell between two lines:
+    # it is the head of a list, missing every model after it.
+    case "$probe_rc" in 124|137|141|143) : > "$printed" ;; esac
+    [ "$(stat -c %s "$printed" 2>/dev/null || echo 0)" -lt "$MAX_REACH_BYTES" ] || : > "$printed"
     if [ -s "$printed" ] && [ -z "$(tail -c 1 "$printed")" ]; then
-      sed -E 's/[[:space:]]+$//' "$printed" \
-        | grep -E '^[A-Za-z0-9~._-]+/' > "$reach" 2>/dev/null
+      # Lines are measured before the trailing blanks are trimmed: sed's trim costs
+      # the square of a run of blanks, and a model key from the catalogue can carry
+      # one tens of kilobytes long. Nothing longer than an id the join would keep —
+      # 64 bytes of provider, 128 of model, room for the blanks — passes the grep.
+      LC_ALL=C grep -E '^[A-Za-z0-9~._-]{1,64}/.{1,192}$' "$printed" \
+        | sed -E 's/[[:space:]]+$//' > "$reach" 2>/dev/null
       [ -s "$reach" ] && mv -fT "$reach" "$REACH"
     fi
   fi
@@ -276,11 +321,17 @@ bounded_jq() (
   ulimit -v "$MAX_JQ_KB" 2>/dev/null \
     || { lim="$(ulimit -v)"; [ "$lim" != unlimited ] && [ "$lim" -le "$MAX_JQ_KB" ]; } \
     || exit 1
+  # Without HOME: jq sources $HOME/.jq before every program, and a file there can
+  # redefine limit or utf8bytelength out from under every bound below, or, as a
+  # FIFO, hold the run until its deadline.
+  unset HOME
   exec jq "$@"
 )
 
 staged="$(stage)" || { echo offline; exit 1; }
-bounded_jq -c --rawfile reach "$reach_in" \
+# -n and `input`: the join runs once, over the first value in the file. Given a file
+# of many, jq ran the whole program once per value, the reachable list included.
+bounded_jq -cn --rawfile reach "$reach_in" \
   --argjson max_providers "$MAX_PROVIDERS" --argjson max_models "$MAX_MODELS" '
   # Every string the catalogue supplies is measured before anything is built out of
   # it. An id joins a provider key to each model key of that provider, and the search
@@ -299,7 +350,7 @@ bounded_jq -c --rawfile reach "$reach_in" \
   def number: if type == "number" then . else null end;
   def obj: if type == "object" then . else {} end;
   def arr: if type == "array" then . else [] end;
-  obj as $root
+  (input | obj) as $root
   | ($reach | split("\n") | map(select(length > 0))) as $reachable
   | ($reachable | map({key:., value:true}) | from_entries) as $reach_set
   | [ limit($max_providers; $root | keys_unsorted[]
@@ -394,7 +445,8 @@ if [ -s "$staged" ] && bounded_jq -e '.models | length > 0' "$staged" >/dev/null
         # catalogue would have every later request answered 304 — a permanent
         # day-old list, repairable only by deleting the cache. Which is exactly
         # what people did.
-        [ -n "${etag_pending:-}" ] && [ -s "$etag_pending" ] && mv -fT "$etag_pending" "$ETAG" ;;
+        [ -n "${etag_pending:-}" ] && [ -s "$etag_pending" ] && etag_ok "$etag_pending" \
+          && mv -fT "$etag_pending" "$ETAG" ;;
     esac
   fi
   # A run that ends here has a list. `cached` means it skipped the downloads;
