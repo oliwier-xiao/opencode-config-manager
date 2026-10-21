@@ -1,5 +1,89 @@
 # Changelog
 
+## 1.5.5
+
+A switch writes models and nothing else, on every path; an undo only ever undoes; and
+nothing a file, a catalogue or `~/.jq` holds can make a helper read, wait or send more than
+it says.
+
+### Fixed
+
+- **A saved profile can no longer bring back permissions once the agent map is gone.**
+  `keep_live_agents` merged a profile's agents into the live ones, model fields only, but
+  only when the live file had an `agent` map (or `agents`/`categories` for
+  oh-my-openagent). Without one, the profile's map was written whole: a profile captured
+  while `agent.build.permission.bash` was `"allow"` restored that over a config that had
+  since moved to a global `"ask"`. A missing map is an empty one now, so every entry is
+  cut to its model fields; a map that is there and is not an object is refused before
+  anything is written.
+- **Undo only puts a whole file back over exactly what the switch left there.** It
+  restored the pre-switch copy whatever had happened since, so a permission tightened, an
+  MCP server removed or a key rotated after the switch came back on Undo. Each switch,
+  repair and undo now records a digest of every file it wrote, and Undo is refused, with
+  nothing changed, when the file differs — or was deleted, or the backup is from an
+  earlier version and has no digest. `oc-profiles revert --force` still puts the copy
+  back. Undo is also refused when the config is now read from a different file than the
+  one backed up (the legacy `oh-my-openagent.json` before the migration to `~/.omo`), it
+  leaves alone a file the settings say not to manage, it does not follow a linked backup
+  folder or manifest, it checks and writes the same read of the copy, and a refused undo
+  no longer leaves a backup folder behind to push a real one out at the next prune.
+- **A switch is recorded before it counts as done.** A profile store that could not be
+  updated after the configs were written answered "refused, nothing written" over changed
+  files; the files are now put back and the answer is `E_STORE`, exit 3. Each file is
+  resolved once and backed up, written and put back at that one path. A profile with
+  nothing that applies here is refused instead of moving Undo onto an empty backup.
+- **Every model a switch writes is checked**: `small_model`, each entry of a `models` or
+  `fallback_models` chain, and a model or effort that is not a string, not only `model`.
+- **jq never reads `~/.jq`.** jq sources it before every program, so a FIFO there stalled
+  every helper and a definition there could redefine `limit` or `utf8bytelength` under
+  every bound. Every jq runs without `HOME`.
+- **`bin/sync-models.sh`:**
+  - the entity tag on file reached curl by name: `--etag-compare` follows a link and waits
+    on a FIFO, so a link at that predictable path sent the first line of any readable file
+    to models.dev. It is read through `safe-read` and sent only if it is a tag;
+  - `opencode models` downloaded its own catalogue, whole and decompressed, and read its
+    cache by name. It now runs with its fetch turned off and a bounded copy to read, under
+    `timeout -k 2`;
+  - the trailing-blank trim cost the square of a run of blanks: 40 KB in a model key took
+    49 s. Lines are length-checked first;
+  - a list cut by the deadline or the byte cap is discarded even when the cut falls
+    between two lines;
+  - curl stops retrying after 30 s however long a `Retry-After` asks for;
+  - a catalogue file holding many JSON values is joined once rather than once per value.
+- **The oh-my-openagent probes are bounded by size and shape:** a 1 MiB package
+  manifest, a 4 MiB schema and declaration file, enum searches confined to a window after
+  their first match, and roster names that are short identifiers, at most 256 of them.
+- **`doctor`** reports an agent's `models` only on a 4.x oh-my-openagent; 5.x declares it,
+  and Fix then rewrote a working config. `variant` is reported as old only on 4.x. A file
+  turned off in the settings offers no Fix and the repair refuses it. Rows reach jq
+  through a pipe, so a long profile name no longer empties the Health strip, and a repair
+  that could not put the file back says so rather than claiming it did.
+- **Opencode's remembered efforts are recorded in the backup before they are cleared**,
+  so a run ended in between cannot lose them, and a hand-formatted state file stays
+  formatted.
+- **`bin/safe-write` removes its temporary when it is ended by a signal**, rather than
+  leaving a full copy of the config beside it, and follows a link only when this user
+  owns it.
+- **`bin/jsonc-edit` keeps the comments before a deleted last member.** Deleting it cut
+  from the comma before it, taking the previous member's trailing comment and any line
+  commented out in between.
+- **The panel:** a model picker searches the catalogue only while its list is open — each
+  row's closed picker scored and sorted the whole catalogue on every keystroke in the
+  editor — and a background sync that changed nothing no longer parses the catalogue a
+  second time. A config that will not parse is named by its path instead of handed to
+  `xdg-open`, which put the path on a command line. At most sixteen fallback chips are
+  drawn per agent; the rest are counted.
+- **README and settings** say what the code does: which helpers the panel starts and the
+  one other program, how the model cache is written, when Undo is refused, the template
+  counts, when the first profile is saved, and which file the oh-my-openagent setting
+  manages.
+
+### Tests
+
+- New cases in `switch`, `write`, `doctor`, `hardening`, `sync` and `jsonc` for each fix
+  above; every one fails on 1.5.4. `doctor.test.sh` builds a 4.x and a 5.x
+  oh-my-openagent of its own, so it no longer depends on the copy installed.
+
 ## 1.5.4
 
 The model catalogue is measured before anything is built out of it.
